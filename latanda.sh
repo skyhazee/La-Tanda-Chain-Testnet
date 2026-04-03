@@ -72,6 +72,21 @@ function broadcast_tx() {
 }
 
 # ============================================
+# Binary Checker
+# ============================================
+function check_binary() {
+    if ! command -v latandad &> /dev/null; then
+        echo -e "\n${RED}❌ Error: 'latandad' binary is NOT installed on this machine!${NC}"
+        echo -e "You must install the node first before using this feature."
+        echo -e "Please select ${YELLOW}Option 1 (Install Node & Run)${NC} from the main menu."
+        echo ""
+        read -p "Press Enter to return..."
+        return 1
+    fi
+    return 0
+}
+
+# ============================================
 # Option 1: Install Node
 # ============================================
 function install_node() {
@@ -182,6 +197,7 @@ function install_node() {
 # Option 2: Check Status
 # ============================================
 function check_status() {
+    check_binary || return
     print_logo
     echo -e "${CYAN}--- Node Sync Status ---${NC}"
     if ! command -v pm2 &> /dev/null || ! pm2 list | grep -q "latanda-chain"; then
@@ -206,6 +222,7 @@ function check_status() {
 # Option 3: Wallet Management
 # ============================================
 function manage_wallet() {
+    check_binary || return
     while true; do
         print_logo
         echo -e "${YELLOW}--- Wallet Management ---${NC}"
@@ -255,6 +272,7 @@ function manage_wallet() {
 # Option 4: Create Validator
 # ============================================
 function create_validator() {
+    check_binary || return
     print_logo
     echo -e "${YELLOW}--- Create Validator ---${NC}"
     catch_up=$(latandad status 2>&1 | jq '.sync_info.catching_up' || echo "true")
@@ -296,6 +314,7 @@ EOF
 # Option 5: Governance
 # ============================================
 function manage_gov() {
+    check_binary || return
     while true; do
         if [[ -n "$1" ]]; then return; fi # Exit immediately if called strictly from CLI without interactive loop handling. Actually we handle the loop inside. Wait, for subcommand, if they choose `0` it drops them to interactive menu. That's fine. Wait, better just keep as is, if break, it goes back.
 
