@@ -9,6 +9,11 @@
 set -e
 
 # ============================================
+# Global Environment PATH
+# ============================================
+export PATH="/usr/local/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
+
+# ============================================
 # Theme & Colors 
 # ============================================
 GREEN='\033[0;32m'
@@ -124,7 +129,9 @@ function install_node() {
         cd $BUILD_DIR
         export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
         go mod tidy 2>&1 | tail -3
-        go build -o /usr/local/bin/latandad ./cmd/latandad
+        go build -o ./build_latandad ./cmd/latandad
+        sudo mv ./build_latandad /usr/local/bin/latandad
+        sudo chmod +x /usr/local/bin/latandad
     else
         echo -e "${RED}Error: Source tarball not found or network error.${NC}"
         read -p "Press Enter to return..."
