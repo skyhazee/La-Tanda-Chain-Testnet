@@ -33,6 +33,40 @@ function print_logo() {
 }
 
 # ============================================
+# Transaction Helper (Hides JSON, Shows UI)
+# ============================================
+function broadcast_tx() {
+    local cmd="$1"
+    echo -e "${CYAN}Broadcasting transaction to the network...${NC}"
+    
+    # Run the transaction silently but capture the JSON output. 
+    # Force -y to skip prompt.
+    local output
+    output=$(eval "$cmd -y --output json 2>&1" || true)
+
+    if echo "$output" | jq -e . &>/dev/null; then
+        local code=$(echo "$output" | jq -r '.code')
+        local txhash=$(echo "$output" | jq -r '.txhash')
+        local raw_log=$(echo "$output" | jq -r '.raw_log')
+
+        if [[ "$code" == "0" ]]; then
+            echo -e "\n  ${GREEN}✅ Transaction Successful!${NC}"
+            echo -e "  TX Hash: ${CYAN}$txhash${NC}"
+            echo -e "  (You can verify this hash on the explorer)"
+            echo ""
+        else
+            echo -e "\n  ${RED}❌ Transaction Failed!${NC}"
+            echo -e "  Error Code: $code"
+            echo -e "  Reason: $raw_log"
+            echo ""
+        fi
+    else
+        echo -e "${RED}❌ Execution Failed!${NC}"
+        echo -e "$output" | head -n 5
+    fi
+}
+
+# ============================================
 # Option 1: Install Node
 # ============================================
 function install_node() {
@@ -241,14 +275,8 @@ function create_validator() {
 }
 EOF
 
-    echo -e "${YELLOW}Executing create-validator transaction...${NC}"
-    latandad tx staking create-validator validator.json \
-      --from "$wname" \
-      --keyring-backend test \
-      --chain-id latanda-testnet-1 \
-      --gas auto \
-      --gas-adjustment 1.4 \
-      --fees 500ultd
+    CMD="latandad tx staking create-validator validator.json --from \"$wname\" --keyring-backend test --chain-id latanda-testnet-1 --gas auto --gas-adjustment 1.4 --fees 500ultd"
+    broadcast_tx "$CMD"
     
     echo -e "${GREEN}Transaction broadcasted! Check Discord and Block Explorer to verify your voting power.${NC}"
     rm validator.json 2>/dev/null || true
@@ -260,18 +288,43 @@ EOF
 # ============================================
 function manage_gov() {
     while true; do
+        if [[ -n "$1" ]]; then return; fi # Exit immediately if called strictly from CLI without interactive loop handling. Actually we handle the loop inside. Wait, for subcommand, if they choose `0` it drops them to interactive menu. That's fine. Wait, better just keep as is, if break, it goes back.
+
         print_logo
         echo -e "${YELLOW}--- Governance Hub ---${NC}"
         echo "1. List All Active/Passed Proposals"
         echo "2. Vote on a Proposal"
         echo "3. Submit a New Text Proposal"
-        echo "0. Back to Main Menu"
+        echo "0. Back/Exit"
         echo ""
         read -p "Select action: " opt
         case $opt in
             1)
                 echo -e "${CYAN}Fetching network proposals...${NC}"
-                latandad query gov proposals --output json | jq -r '.proposals[] | "ID: \(.id) | Status: \(.status) | Title: \(.title // .messages[0].content.title)"'
+                PROPOSALS=$(latandad query gov proposals --output json 2>/dev/null || echo '{"proposals":[]}')
+                
+                echo "$PROPOSALS" | jq -c '.proposals[] | {id: .id, status: .status, title: (.title // .messages[0].content.title), desc: (.summary // .messages[0].content.description), end: .voting_end_time}' | while read -r line; do
+                    id=$(echo "$line" | jq -r '.id')
+                    status=$(echo "$line" | jq -r '.status')
+                    title=$(echo "$line" | jq -r '.title')
+                    desc=$(echo "$line" | jq -r '.desc' | head -c 180 | tr '\n' ' ')
+                    end_time=$(echo "$line" | jq -r '.end')
+                    
+                    echo -e "\n${CYAN}▎ 📋 GOV-$(printf "%03d" $id): $title${NC}"
+                    echo -e "  ▎ Status: $status"
+                    if [[ "$status" == "PROPOSAL_STATUS_VOTING_PERIOD" ]]; then
+                        echo -e "  ▎ Voting Ends: $end_time"
+                    fi
+                    echo -e "  ▎ "
+                    echo -e "  ▎ $desc..."
+                    echo -e "  ▎ "
+                    if [[ "$status" == "PROPOSAL_STATUS_VOTING_PERIOD" ]]; then
+                        echo -e "  ▎ ${YELLOW}Vote command:${NC}"
+                        echo -e "  ▎ latandad tx gov vote $id yes --from <your-key> --keyring-backend test --chain-id latanda-testnet-1 \\"
+                        echo -e "  ▎   --fees 500ultd --gas auto -y"
+                    fi
+                done
+                echo ""
                 read -p "Press Enter to continue..."
                 ;;
             2)
@@ -280,13 +333,8 @@ function manage_gov() {
                 read -p "Enter your vote (yes / no / no_with_veto / abstain): " vote
                 read -p "Enter your wallet name to vote from: " wname
                 
-                latandad tx gov vote "$pid" "$vote" \
-                    --from "$wname" \
-                    --keyring-backend test \
-                    --chain-id latanda-testnet-1 \
-                    --gas auto \
-                    --gas-adjustment 1.4 \
-                    --fees 500ultd
+                CMD="latandad tx gov vote \"$pid\" \"$vote\" --from \"$wname\" --keyring-backend test --chain-id latanda-testnet-1 --gas auto --gas-adjustment 1.4 --fees 500ultd"
+                broadcast_tx "$CMD"
                     
                 read -p "Press Enter to continue..."
                 ;;
@@ -308,13 +356,8 @@ function manage_gov() {
   "expedited": false
 }
 EOF
-                latandad tx gov submit-proposal proposal.json \
-                    --from "$wname" \
-                    --keyring-backend test \
-                    --chain-id latanda-testnet-1 \
-                    --gas auto \
-                    --gas-adjustment 1.4 \
-                    --fees 500ultd
+                CMD="latandad tx gov submit-proposal proposal.json --from \"$wname\" --keyring-backend test --chain-id latanda-testnet-1 --gas auto --gas-adjustment 1.4 --fees 500ultd"
+                broadcast_tx "$CMD"
 
                 rm proposal.json 2>/dev/null || true
                 read -p "Press Enter to continue..."
@@ -625,31 +668,66 @@ LAUNCHEREOF
     read -p "Press Enter to return to main menu..."
 }
 
-# ============================================
-# Main Loop (Menu Router)
-# ============================================
-while true; do
-    print_logo
-    echo "1) Install Node & Run (One-Click PM2 Setup)"
-    echo "2) Check Node Status & Sync Progress"
-    echo "3) Wallet Management"
-    echo "4) Create Validator (Stake on Network)"
-    echo "5) Governance Actions (Vote / Propose)"
-    echo "6) View Live Logs"
-    echo "7) Install & Run Advanced Monitor"
-    echo "0) Exit Manager"
-    echo "---------------------------------------------------"
-    read -p "Please select an option [0-7]: " choice
+function show_interactive_menu() {
+    while true; do
+        print_logo
+        echo "1) Install Node & Run (One-Click PM2 Setup)"
+        echo "2) Check Node Status & Sync Progress"
+        echo "3) Wallet Management"
+        echo "4) Create Validator (Stake on Network)"
+        echo "5) Governance Actions (Vote / Propose)"
+        echo "6) View Live Logs"
+        echo "7) Install & Run Advanced Monitor (SkyHaze)"
+        echo "0) Exit Manager"
+        echo "---------------------------------------------------"
+        read -p "Please select an option [0-7]: " choice
 
-    case $choice in
-        1) install_node ;;
-        2) check_status ;;
-        3) manage_wallet ;;
-        4) create_validator ;;
-        5) manage_gov ;;
-        6) show_logs ;;
-        7) install_advanced_monitor ;;
-        0) echo -e "${CYAN}Exiting La Tanda Manager. See you next time!${NC}"; exit 0 ;;
-        *) echo -e "${RED}Invalid feature! Select a valid number.${NC}"; sleep 1 ;;
-    esac
-done
+        case $choice in
+            1) install_node ;;
+            2) check_status ;;
+            3) manage_wallet ;;
+            4) create_validator ;;
+            5) manage_gov ;;
+            6) show_logs ;;
+            7) install_advanced_monitor ;;
+            0) echo -e "${CYAN}Exiting La Tanda Manager. See you next time!${NC}"; exit 0 ;;
+            *) echo -e "${RED}Invalid feature! Select a valid number.${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# ============================================
+# Subcommand Router
+# ============================================
+case "$1" in
+    status) check_status ;;
+    wallet) manage_wallet ;;
+    validator) create_validator ;;
+    gov) manage_gov ;;
+    logs) show_logs ;;
+    monitor) 
+        if command -v latmon &> /dev/null; then
+            screen -r latmon
+        else
+            echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 7 to install it.${NC}"
+        fi
+        ;;
+    install) install_node ;;
+    help|--help|-h)
+        echo -e "${CYAN}  La Tanda Node Manager (latman)${NC}"
+        echo "  Usage: latman [command]"
+        echo ""
+        echo "  Commands:"
+        echo "    (none)      - Open interactive menu dashboard"
+        echo "    status      - Check node status and sync progress"
+        echo "    wallet      - Manage wallets"
+        echo "    validator   - Create or check validator"
+        echo "    gov         - Manage governance proposals"
+        echo "    logs        - View live pm2 logs"
+        echo "    monitor     - Attach to advanced python monitor (SkyHaze)"
+        echo "    install     - Install node and run with PM2"
+        ;;
+    *)
+        show_interactive_menu
+        ;;
+esac

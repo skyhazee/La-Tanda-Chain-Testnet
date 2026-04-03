@@ -9,16 +9,26 @@ This repository provides an interactive, easy-to-use manager for deploying and m
 
 ## Quick Start Installation
 
-Run this one-line command sequence in your terminal to start the manager:
+Run this one-line command sequence in your terminal to securely install the interactive CLI (`latman`) system-wide:
 
 ```bash
-wget -q https://raw.githubusercontent.com/skyhazee/La-Tanda-Chain-Testnet/main/latanda.sh -O latanda.sh && chmod +x latanda.sh && ./latanda.sh
+sudo wget -q https://raw.githubusercontent.com/skyhazee/La-Tanda-Chain-Testnet/main/latanda.sh -O /usr/local/bin/latman && sudo chmod +x /usr/local/bin/latman && latman
 ```
 
+## Global Subcommands
+
+This dashboard can be launched fully interactively by just typing `latman`, but it also supports direct quick-actions via subcommands from anywhere in your server:
+
+- `latman status` : Check node sync progress and validation status.
+- `latman wallet` : Jump straight into wallet creation & balance checker.
+- `latman validator` : Create a validator instantly.
+- `latman gov`   : View beautifully formatted active proposals and cast your vote.
+- `latman logs`   : Stream real-time node outputs via PM2.
+- `latman monitor`: Attach to the Advanced Python UI (SkyHaze monitor).
 ## Step-by-Step Guide for Beginners
 
 ### 1. Install and Sync Your Node
-- Launch the interactive manager using `./latanda.sh`.
+- Launch the interactive manager using `latman`.
 - Select **Option 1 (Install Node & Run)**. The script will automatically download the required dependencies, Go, the `latandad` binary, and set up the genesis file. It will start the node in the background using PM2.
 - Wait for the node to fully catch up to the network. Check the progress by selecting **Option 2 (Check Node Status)**. **Do not proceed** to validator creation until the "Catching Up" status shows as "False".
 
