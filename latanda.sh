@@ -329,9 +329,9 @@ function manage_gov() {
         case $opt in
             1)
                 echo -e "${CYAN}Fetching network proposals...${NC}"
-                PROPOSALS=$(latandad query gov proposals --output json 2>/dev/null || echo '{"proposals":[]}')
+                PROPOSALS=$(latandad query gov proposals --output json 2>/dev/null || latandad query gov proposals --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null || echo '{"proposals":[]}')
                 
-                echo "$PROPOSALS" | jq -c '.proposals[] | {id: .id, status: .status, title: (.title // .messages[0].content.title), desc: (.summary // .messages[0].content.description), end: .voting_end_time}' | while read -r line; do
+                echo "$PROPOSALS" | jq -c '(.proposals // [])[] | {id: .id, status: .status, title: (.title // .messages[0].content.title), desc: (.summary // .messages[0].content.description), end: .voting_end_time}' | while read -r line; do
                     id=$(echo "$line" | jq -r '.id')
                     status=$(echo "$line" | jq -r '.status')
                     title=$(echo "$line" | jq -r '.title')
