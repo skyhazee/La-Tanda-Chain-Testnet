@@ -25,6 +25,7 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - `latman gov`   : View beautifully formatted active proposals and cast your vote.
 - `latman logs`   : Stream real-time node outputs via PM2.
 - `latman monitor`: Attach to the Advanced Python UI (SkyHaze monitor).
+- `latman uninstall`: Safely stop processes and wipe the node completely.
 ## Step-by-Step Guide for Beginners
 
 ### 1. Install and Sync Your Node

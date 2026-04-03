@@ -696,6 +696,53 @@ LAUNCHEREOF
     read -p "Press Enter to return to main menu..."
 }
 
+# ============================================
+# Option 8: Clean Uninstall
+# ============================================
+function uninstall_node() {
+    print_logo
+    echo -e "${RED}======================================================${NC}"
+    echo -e "${RED}       ⚠️  DANGER: CLEAN UNINSTALLATION ⚠️           ${NC}"
+    echo -e "${RED}======================================================${NC}"
+    echo -e "This will completely remove the La Tanda Node, PM2 routines,"
+    echo -e "Blockchain Data, and ${RED}ALL YOUR SAVED WALLETS${NC} from this machine."
+    echo ""
+    echo -e "${YELLOW}🚨 CRITICAL REMINDER: 🚨${NC}"
+    echo -e "Please ensure you have securely backed up your 24-word Mnemonic"
+    echo -e "Phrases for all your wallets. Once wiped, they are gone FOREVER."
+    echo ""
+    read -p "Type 'DELETE' to confirm you have backed up and want to wipe: " confirm
+    
+    if [[ "$confirm" != "DELETE" ]]; then
+        echo -e "\n${CYAN}Uninstall aborted. Your node and wallets are safe.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+    
+    echo -e "\n${YELLOW}Stopping PM2 Background Processes...${NC}"
+    if command -v pm2 &> /dev/null; then
+        pm2 stop latanda-chain &>/dev/null || true
+        pm2 delete latanda-chain &>/dev/null || true
+        pm2 save --force &>/dev/null || true
+    fi
+    pkill -f latandad &>/dev/null || true
+    pkill -f monitor.py &>/dev/null || true
+    pkill -f latmon &>/dev/null || true
+
+    echo -e "${YELLOW}Wiping Node & Wallet Data...${NC}"
+    rm -rf $HOME/.latanda
+
+    echo -e "${YELLOW}Removing Binaries & System Scripts...${NC}"
+    sudo rm -f /usr/local/bin/latandad
+    sudo rm -f /usr/local/bin/latman
+    sudo rm -f /usr/local/bin/latmon
+    rm -rf $HOME/.latandad-monitor
+
+    echo -e "${GREEN}✅ Uninstallation Complete!${NC}"
+    echo -e "The La Tanda CLI and all node data have been cleanly wiped."
+    exit 0
+}
+
 function show_interactive_menu() {
     while true; do
         print_logo
@@ -706,9 +753,10 @@ function show_interactive_menu() {
         echo "5) Governance Actions (Vote / Propose)"
         echo "6) View Live Logs"
         echo "7) Install & Run Advanced Monitor (SkyHaze)"
+        echo "8) Clean Uninstall Node & Manager"
         echo "0) Exit Manager"
         echo "---------------------------------------------------"
-        read -p "Please select an option [0-7]: " choice
+        read -p "Please select an option [0-8]: " choice
 
         case $choice in
             1) install_node ;;
@@ -718,6 +766,7 @@ function show_interactive_menu() {
             5) manage_gov ;;
             6) show_logs ;;
             7) install_advanced_monitor ;;
+            8) uninstall_node ;;
             0) echo -e "${CYAN}Exiting La Tanda Manager. See you next time!${NC}"; exit 0 ;;
             *) echo -e "${RED}Invalid feature! Select a valid number.${NC}"; sleep 1 ;;
         esac
@@ -741,6 +790,7 @@ case "$1" in
         fi
         ;;
     install) install_node ;;
+    uninstall) uninstall_node ;;
     help|--help|-h)
         echo -e "${CYAN}  La Tanda Node Manager (latman)${NC}"
         echo "  Usage: latman [command]"
@@ -754,6 +804,7 @@ case "$1" in
         echo "    logs        - View live pm2 logs"
         echo "    monitor     - Attach to advanced python monitor (SkyHaze)"
         echo "    install     - Install node and run with PM2"
+        echo "    uninstall   - Cleanly wipe the node, data, and CLI manager"
         ;;
     *)
         show_interactive_menu
