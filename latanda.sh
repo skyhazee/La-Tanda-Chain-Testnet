@@ -239,7 +239,9 @@ function manage_wallet() {
             4)
                 echo ""
                 read -p "Enter wallet address (starts with ltd1...): " waddr
-                balance=$(latandad query bank balances "$waddr" 2>/dev/null | jq -r '.balances[].amount' 2>/dev/null || echo "0")
+                RAW_BAL=$(latandad query bank balances "$waddr" --output json 2>/dev/null || latandad query bank balances "$waddr" --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null)
+                balance=$(echo "$RAW_BAL" | jq -r '.balances[0].amount' 2>/dev/null)
+                if [[ -z "$balance" || "$balance" == "null" || "$balance" == "" ]]; then balance="0"; fi
                 echo -e "Balance: ${GREEN}${balance} ultd${NC}"
                 read -p "Press Enter to continue..."
                 ;;
