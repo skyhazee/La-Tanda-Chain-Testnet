@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain — Interactive Node Manager
-# Version: 1.0
+# Version: 1.1 (Security Hotfix)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -41,13 +41,13 @@ function print_logo() {
 # Transaction Helper (Hides JSON, Shows UI)
 # ============================================
 function broadcast_tx() {
-    local cmd="$1"
-    echo -e "${CYAN}Broadcasting transaction to the network...${NC}"
-    
-    # Run the transaction silently but capture the JSON output. 
-    # Force -y to skip prompt.
+    local desc="$1"
+    shift
+    echo -e "${CYAN}Broadcasting transaction: ${desc}${NC}"
+
+    # Execute command using argument array (no eval) and capture JSON output.
     local output
-    output=$(eval "$cmd -y --output json 2>&1" || true)
+    output=$("$@" -y --output json 2>&1 || true)
 
     if echo "$output" | jq -e . &>/dev/null; then
         local code=$(echo "$output" | jq -r '.code')
@@ -134,14 +134,14 @@ function install_node() {
 
     echo -e "${YELLOW}[4/7] Building latandad binary...${NC}"
     BUILD_DIR="/tmp/latanda-build"
-    rm -rf $BUILD_DIR
-    mkdir -p $BUILD_DIR
-    cd $BUILD_DIR
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
 
     wget -q https://latanda.online/chain/latanda-chain-source.tar.gz -O /tmp/latanda-chain-source.tar.gz 2>/dev/null || true
     if [[ -f /tmp/latanda-chain-source.tar.gz ]]; then
-        tar -xzf /tmp/latanda-chain-source.tar.gz -C $BUILD_DIR
-        cd $BUILD_DIR
+        tar -xzf /tmp/latanda-chain-source.tar.gz -C "$BUILD_DIR"
+        cd "$BUILD_DIR"
         export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
         go mod tidy 2>&1 | tail -3
         go build -o ./build_latandad ./cmd/latandad
@@ -163,18 +163,18 @@ function install_node() {
     HOME_DIR="$HOME/.latanda"
 
     # Avoid failing if node already mapped
-    latandad init "$MONIKER" --chain-id $CHAIN_ID --default-denom ultd > /dev/null 2>&1 || true
+    latandad init "$MONIKER" --chain-id "$CHAIN_ID" --default-denom ultd --home "$HOME_DIR" > /dev/null 2>&1 || true
 
     echo "Downloading genesis file..."
-    wget -q https://latanda.online/chain/genesis.json -O $HOME_DIR/config/genesis.json
+    wget -q https://latanda.online/chain/genesis.json -O "$HOME_DIR/config/genesis.json"
     
     echo -e "${YELLOW}[6/7] Configuring node...${NC}"
     CONFIG_DIR="$HOME_DIR/config"
     PEERS="483a8110c3cd93c8dd3801d935151e98656f5b67@168.231.67.201:26656"
-    sed -i "s|persistent_peers = \".*\"|persistent_peers = \"$PEERS\"|" $CONFIG_DIR/config.toml
-    sed -i "s|seeds = \".*\"|seeds = \"$PEERS\"|" $CONFIG_DIR/config.toml
-    sed -i "s|minimum-gas-prices = \".*\"|minimum-gas-prices = \"0.001ultd\"|" $CONFIG_DIR/app.toml
-    sed -i 's|laddr = "tcp://127.0.0.1:26657"|laddr = "tcp://0.0.0.0:26657"|' $CONFIG_DIR/config.toml
+    sed -i "s|persistent_peers = \".*\"|persistent_peers = \"$PEERS\"|" "$CONFIG_DIR/config.toml"
+    sed -i "s|seeds = \".*\"|seeds = \"$PEERS\"|" "$CONFIG_DIR/config.toml"
+    sed -i "s|minimum-gas-prices = \".*\"|minimum-gas-prices = \"0.001ultd\"|" "$CONFIG_DIR/app.toml"
+    sed -i 's|laddr = "tcp://127.0.0.1:26657"|laddr = "tcp://0.0.0.0:26657"|' "$CONFIG_DIR/config.toml"
 
     echo -e "${YELLOW}[7/7] Configuring firewall and starting node...${NC}"
     sudo ufw allow 26656/tcp > /dev/null 2>&1
@@ -302,8 +302,14 @@ function create_validator() {
 }
 EOF
 
-    CMD="latandad tx staking create-validator validator.json --from \"$wname\" --keyring-backend test --chain-id latanda-testnet-1 --gas auto --gas-adjustment 1.4 --fees 500ultd"
-    broadcast_tx "$CMD"
+    broadcast_tx "create-validator for $moniker" \
+        latandad tx staking create-validator validator.json \
+        --from "$wname" \
+        --keyring-backend test \
+        --chain-id latanda-testnet-1 \
+        --gas auto \
+        --gas-adjustment 1.4 \
+        --fees 500ultd
     
     echo -e "${GREEN}Transaction broadcasted! Check Discord and Block Explorer to verify your voting power.${NC}"
     rm validator.json 2>/dev/null || true
@@ -316,8 +322,6 @@ EOF
 function manage_gov() {
     check_binary || return
     while true; do
-        if [[ -n "$1" ]]; then return; fi # Exit immediately if called strictly from CLI without interactive loop handling. Actually we handle the loop inside. Wait, for subcommand, if they choose `0` it drops them to interactive menu. That's fine. Wait, better just keep as is, if break, it goes back.
-
         print_logo
         echo -e "${YELLOW}--- Governance Hub ---${NC}"
         echo "1. List All Active/Passed Proposals"
@@ -361,8 +365,14 @@ function manage_gov() {
                 read -p "Enter your vote (yes / no / no_with_veto / abstain): " vote
                 read -p "Enter your wallet name to vote from: " wname
                 
-                CMD="latandad tx gov vote \"$pid\" \"$vote\" --from \"$wname\" --keyring-backend test --chain-id latanda-testnet-1 --gas auto --gas-adjustment 1.4 --fees 500ultd"
-                broadcast_tx "$CMD"
+                broadcast_tx "vote on proposal $pid" \
+                    latandad tx gov vote "$pid" "$vote" \
+                    --from "$wname" \
+                    --keyring-backend test \
+                    --chain-id latanda-testnet-1 \
+                    --gas auto \
+                    --gas-adjustment 1.4 \
+                    --fees 500ultd
                     
                 read -p "Press Enter to continue..."
                 ;;
@@ -384,8 +394,14 @@ function manage_gov() {
   "expedited": false
 }
 EOF
-                CMD="latandad tx gov submit-proposal proposal.json --from \"$wname\" --keyring-backend test --chain-id latanda-testnet-1 --gas auto --gas-adjustment 1.4 --fees 500ultd"
-                broadcast_tx "$CMD"
+                broadcast_tx "submit proposal" \
+                    latandad tx gov submit-proposal proposal.json \
+                    --from "$wname" \
+                    --keyring-backend test \
+                    --chain-id latanda-testnet-1 \
+                    --gas auto \
+                    --gas-adjustment 1.4 \
+                    --fees 500ultd
 
                 rm proposal.json 2>/dev/null || true
                 read -p "Press Enter to continue..."
@@ -413,6 +429,12 @@ function install_advanced_monitor() {
     print_logo
     echo -e "${YELLOW}>> Installing Advanced Monitor...${NC}"
     echo ""
+
+    if ! sudo -v; then
+        echo -e "${RED}Sudo access is required to install the monitor launcher.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
 
     if ! command -v python3 >/dev/null 2>&1; then
         echo -e "${YELLOW}Installing python3...${NC}"
@@ -660,36 +682,37 @@ PYEOF
     chmod +x "$INSTALL_DIR/monitor.py"
 
     echo -e "${YELLOW}Creating 'latmon' launcher in /usr/local/bin...${NC}"
-    cat > /usr/local/bin/latmon << 'LAUNCHEREOF'
+    MONITOR_FULL_PATH="$INSTALL_DIR/monitor.py"
+    sudo tee /usr/local/bin/latmon >/dev/null << LAUNCHEREOF
 #!/bin/bash
 SCREEN_NAME="latmon"
-MONITOR_PATH="$HOME/.latandad-monitor/monitor.py"
+MONITOR_PATH="$MONITOR_FULL_PATH"
 
-case "$1" in
-  stop) screen -XS $SCREEN_NAME quit 2>/dev/null && echo "Monitor dihentikan." || echo "Tidak ada session aktif." ;;
-  attach|log) screen -r $SCREEN_NAME ;;
-  status) screen -list | grep $SCREEN_NAME || echo "Monitor tidak berjalan." ;;
-  restart) screen -XS $SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS $SCREEN_NAME python3 $MONITOR_PATH; echo -e "\033[32m[✓] Monitor di-restart.\033[0m" ;;
+case "\$1" in
+  stop) screen -XS \$SCREEN_NAME quit 2>/dev/null && echo "Monitor dihentikan." || echo "Tidak ada session aktif." ;;
+  attach|log) screen -r \$SCREEN_NAME ;;
+  status) screen -list | grep \$SCREEN_NAME || echo "Monitor tidak berjalan." ;;
+  restart) screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH; echo -e "\033[32m[✓] Monitor di-restart.\033[0m" ;;
   *)
-    if screen -list 2>/dev/null | grep -q "$SCREEN_NAME"; then
+    if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
       echo -e "\033[33m[!] Monitor sudah berjalan.\033[0m"
-      echo -e "    Attach  : screen -r $SCREEN_NAME"
+      echo -e "    Attach  : screen -r \$SCREEN_NAME"
       echo -e "    Stop    : latmon stop"
     else
       echo -e "\033[32m[✓] Memulai monitor...\033[0m"
-      screen -dmS $SCREEN_NAME python3 $MONITOR_PATH
+      screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH
       sleep 0.8
-      if screen -list 2>/dev/null | grep -q "$SCREEN_NAME"; then
-        echo -e "\033[32m[✓] Berjalan! Attach dengan:\033[0m  screen -r $SCREEN_NAME"
+      if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
+        echo -e "\033[32m[✓] Berjalan! Attach dengan:\033[0m  screen -r \$SCREEN_NAME"
       else
-        echo -e "\033[31m[✗] Gagal start. Coba manual:\033[0m  python3 $MONITOR_PATH"
+        echo -e "\033[31m[✗] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
       fi
     fi
     ;;
 esac
 LAUNCHEREOF
 
-    chmod +x /usr/local/bin/latmon
+    sudo chmod +x /usr/local/bin/latmon
     echo -e "${GREEN}Monitor successfully installed!${NC}"
     echo -e "You can launch it anytime by typing: ${GREEN}latmon${NC}"
     echo ""
@@ -730,13 +753,13 @@ function uninstall_node() {
     pkill -f latmon &>/dev/null || true
 
     echo -e "${YELLOW}Wiping Node & Wallet Data...${NC}"
-    rm -rf $HOME/.latanda
+    rm -rf "$HOME/.latanda"
 
     echo -e "${YELLOW}Removing Binaries & System Scripts...${NC}"
     sudo rm -f /usr/local/bin/latandad
     sudo rm -f /usr/local/bin/latman
     sudo rm -f /usr/local/bin/latmon
-    rm -rf $HOME/.latandad-monitor
+    rm -rf "$HOME/.latandad-monitor"
 
     echo -e "${GREEN}✅ Uninstallation Complete!${NC}"
     echo -e "The La Tanda CLI and all node data have been cleanly wiped."
