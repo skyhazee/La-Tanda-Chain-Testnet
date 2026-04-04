@@ -775,7 +775,7 @@ function show_interactive_menu() {
         echo "4) Create Validator (Stake on Network)"
         echo "5) Governance Actions (Vote / Propose)"
         echo "6) View Live Logs"
-        echo "7) Install & Run Advanced Monitor (SkyHaze)"
+        echo "7) Install & Run Advanced Monitor"
         echo "8) Clean Uninstall Node & Manager"
         echo "0) Exit Manager"
         echo "---------------------------------------------------"
@@ -825,7 +825,7 @@ case "$1" in
         echo "    validator   - Create or check validator"
         echo "    gov         - Manage governance proposals"
         echo "    logs        - View live pm2 logs"
-        echo "    monitor     - Attach to advanced python monitor (SkyHaze)"
+        echo "    monitor     - Attach to advanced python monitor"
         echo "    install     - Install node and run with PM2"
         echo "    uninstall   - Cleanly wipe the node, data, and CLI manager"
         ;;
