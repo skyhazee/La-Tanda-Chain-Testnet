@@ -1,17 +1,29 @@
 #!/bin/bash
 # ============================================
-# La Tanda Chain — Interactive Node Manager
+# La Tanda Chain â€” Interactive Node Manager
 # Version: 1.1 (Security Hotfix)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
 
-set -e
+set -euo pipefail
 
 # ============================================
 # Global Environment PATH
 # ============================================
 export PATH="/usr/local/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
+
+# ============================================
+# Defaults
+# ============================================
+CHAIN_ID="latanda-testnet-1"
+HOME_DIR="${HOME}/.latanda"
+DEFAULT_FEES="500ultd"
+SOURCE_TARBALL="/tmp/latanda-chain-source.tar.gz"
+GO_TARBALL="/tmp/go.tar.gz"
+GO_SHA256="cb2396bae64183cdccce6c8e145b44f26b4a8c5e5c3ddc56b79f5bab60f41f4e"
+# Set this to expected SHA256 to enforce source integrity verification.
+SOURCE_SHA256="ba73d41a8f5ba146e90dc8af8fd60fdd3279fdec6f9fdbb026942c19751143dc"
 
 # ============================================
 # Theme & Colors 
@@ -33,7 +45,7 @@ function print_logo() {
     echo " | |__ / _\` | | |/ _\` | ' \\/ _\` / _\` | "
     echo " |____|\__,_| |_|\__,_|_||_\__,_\__,_| "
     echo "                                        "
-    echo "  Chain Node Manager — latanda-testnet-1 "
+    echo "  Chain Node Manager â€” latanda-testnet-1 "
     echo -e "${NC}"
 }
 
@@ -55,18 +67,18 @@ function broadcast_tx() {
         local raw_log=$(echo "$output" | jq -r '.raw_log')
 
         if [[ "$code" == "0" ]]; then
-            echo -e "\n  ${GREEN}✅ Transaction Successful!${NC}"
+            echo -e "\n  ${GREEN}âœ… Transaction Successful!${NC}"
             echo -e "  TX Hash: ${CYAN}$txhash${NC}"
             echo -e "  (You can verify this hash on the explorer)"
             echo ""
         else
-            echo -e "\n  ${RED}❌ Transaction Failed!${NC}"
+            echo -e "\n  ${RED}âŒ Transaction Failed!${NC}"
             echo -e "  Error Code: $code"
             echo -e "  Reason: $raw_log"
             echo ""
         fi
     else
-        echo -e "${RED}❌ Execution Failed!${NC}"
+        echo -e "${RED}âŒ Execution Failed!${NC}"
         echo -e "$output" | head -n 5
     fi
 }
@@ -76,7 +88,7 @@ function broadcast_tx() {
 # ============================================
 function check_binary() {
     if ! command -v latandad &> /dev/null; then
-        echo -e "\n${RED}❌ Error: 'latandad' binary is NOT installed on this machine!${NC}"
+        echo -e "\n${RED}âŒ Error: 'latandad' binary is NOT installed on this machine!${NC}"
         echo -e "You must install the node first before using this feature."
         echo -e "Please select ${YELLOW}Option 1 (Install Node & Run)${NC} from the main menu."
         echo ""
@@ -84,6 +96,44 @@ function check_binary() {
         return 1
     fi
     return 0
+}
+
+function verify_checksum() {
+    local file="$1"
+    local expected="$2"
+    if [[ -z "$expected" ]]; then
+        echo -e "${YELLOW}[!] SOURCE_SHA256 is empty, checksum verification skipped.${NC}"
+        return 0
+    fi
+    local actual
+    actual=$(sha256sum "$file" | awk '{print $1}')
+    if [[ "$actual" != "$expected" ]]; then
+        echo -e "${RED}Checksum mismatch for $file${NC}"
+        echo -e "Expected: $expected"
+        echo -e "Actual  : $actual"
+        return 1
+    fi
+    return 0
+}
+
+function validate_wallet_name() {
+    local value="$1"
+    [[ "$value" =~ ^[a-zA-Z0-9_-]{1,64}$ ]]
+}
+
+function validate_proposal_id() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9]{1,8}$ ]]
+}
+
+function validate_vote() {
+    local value="$1"
+    [[ "$value" == "yes" || "$value" == "no" || "$value" == "abstain" || "$value" == "no_with_veto" ]]
+}
+
+function validate_deposit() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9]+ultd$ ]]
 }
 
 # ============================================
@@ -122,10 +172,14 @@ function install_node() {
     if command -v go &> /dev/null && [[ "$(go version)" == *"go1.24"* ]]; then
         echo -e "${GREEN}Go already installed: $(go version)${NC}"
     else
-        wget -q https://go.dev/dl/go1.24.1.linux-amd64.tar.gz -O /tmp/go.tar.gz
+        wget -q https://go.dev/dl/go1.24.1.linux-amd64.tar.gz -O "$GO_TARBALL"
+        verify_checksum "$GO_TARBALL" "$GO_SHA256" || {
+            read -p "Press Enter to return..."
+            return
+        }
         sudo rm -rf /usr/local/go
-        sudo tar -C /usr/local -xzf /tmp/go.tar.gz
-        rm /tmp/go.tar.gz
+        sudo tar -C /usr/local -xzf "$GO_TARBALL"
+        rm "$GO_TARBALL"
         if ! grep -q '/usr/local/go/bin' ~/.bashrc; then
             echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> ~/.bashrc
         fi
@@ -138,9 +192,13 @@ function install_node() {
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
 
-    wget -q https://latanda.online/chain/latanda-chain-source.tar.gz -O /tmp/latanda-chain-source.tar.gz 2>/dev/null || true
-    if [[ -f /tmp/latanda-chain-source.tar.gz ]]; then
-        tar -xzf /tmp/latanda-chain-source.tar.gz -C "$BUILD_DIR"
+    rm -f "$SOURCE_TARBALL"
+    if wget -q https://latanda.online/chain/latanda-chain-source.tar.gz -O "$SOURCE_TARBALL"; then
+        verify_checksum "$SOURCE_TARBALL" "$SOURCE_SHA256" || {
+            read -p "Press Enter to return..."
+            return
+        }
+        tar -xzf "$SOURCE_TARBALL" -C "$BUILD_DIR"
         cd "$BUILD_DIR"
         export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
         go mod tidy 2>&1 | tail -3
@@ -159,9 +217,6 @@ function install_node() {
     if [[ -z "$MONIKER" ]]; then
         MONIKER="latanda-node-$(hostname -s)"
     fi
-    CHAIN_ID="latanda-testnet-1"
-    HOME_DIR="$HOME/.latanda"
-
     # Avoid failing if node already mapped
     latandad init "$MONIKER" --chain-id "$CHAIN_ID" --default-denom ultd --home "$HOME_DIR" > /dev/null 2>&1 || true
 
@@ -174,20 +229,20 @@ function install_node() {
     sed -i "s|persistent_peers = \".*\"|persistent_peers = \"$PEERS\"|" "$CONFIG_DIR/config.toml"
     sed -i "s|seeds = \".*\"|seeds = \"$PEERS\"|" "$CONFIG_DIR/config.toml"
     sed -i "s|minimum-gas-prices = \".*\"|minimum-gas-prices = \"0.001ultd\"|" "$CONFIG_DIR/app.toml"
-    sed -i 's|laddr = "tcp://127.0.0.1:26657"|laddr = "tcp://0.0.0.0:26657"|' "$CONFIG_DIR/config.toml"
+    # Keep RPC bound to localhost by default.
+    sed -i 's|laddr = "tcp://0.0.0.0:26657"|laddr = "tcp://127.0.0.1:26657"|' "$CONFIG_DIR/config.toml"
 
     echo -e "${YELLOW}[7/7] Configuring firewall and starting node...${NC}"
     sudo ufw allow 26656/tcp > /dev/null 2>&1
-    sudo ufw allow 26657/tcp > /dev/null 2>&1
 
     # Restarting via pm2 if running
     pm2 delete latanda-chain >/dev/null 2>&1 || true
-    pm2 start latandad --name latanda-chain -- start
+    pm2 start latandad --name latanda-chain -- start --home "$HOME_DIR"
     pm2 save >/dev/null 2>&1
 
     echo ""
     echo -e "${GREEN}Installation Complete! Your node is running in the background.${NC}"
-    echo -e "Node ID:  $(latandad comet show-node-id 2>/dev/null)"
+    echo -e "Node ID:  $(latandad comet show-node-id --home "$HOME_DIR" 2>/dev/null || latandad tendermint show-node-id --home "$HOME_DIR" 2>/dev/null)"
     echo -e "Moniker:  $MONIKER"
     echo ""
     read -p "Press Enter to return to menu..."
@@ -204,8 +259,8 @@ function check_status() {
         echo -e "${RED}Node is not running via PM2. Did you install it properly?${NC}"
     else
         # Allow jq some time if start up is slow
-        catch_up=$(latandad status 2>&1 | jq '.sync_info.catching_up' || echo "Node booting...")
-        block=$(latandad status 2>&1 | jq -r '.sync_info.latest_block_height' || echo "-")
+        catch_up=$(latandad status --home "$HOME_DIR" 2>&1 | jq -r '.sync_info.catching_up' || echo "true")
+        block=$(latandad status --home "$HOME_DIR" 2>&1 | jq -r '.sync_info.latest_block_height' || echo "-")
         echo -e "Latest Validated Block:  ${GREEN}$block${NC}"
         
         if [[ "$catch_up" == "false" ]]; then
@@ -237,26 +292,41 @@ function manage_wallet() {
             1)
                 echo ""
                 read -p "Enter new wallet name: " wname
-                latandad keys add "$wname" --keyring-backend test
+                if ! validate_wallet_name "$wname"; then
+                    echo -e "${RED}Invalid wallet name. Use letters, numbers, _ or - only.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                latandad keys add "$wname" --keyring-backend test --home "$HOME_DIR"
                 echo -e "${RED}IMPORTANT: Save the 24 words mnemonic phrase above securely!${NC}"
                 read -p "Press Enter once you have saved it..."
                 ;;
             2)
                 echo ""
                 read -p "Enter recovery wallet name: " wname
-                latandad keys add "$wname" --recover --keyring-backend test
+                if ! validate_wallet_name "$wname"; then
+                    echo -e "${RED}Invalid wallet name. Use letters, numbers, _ or - only.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                latandad keys add "$wname" --recover --keyring-backend test --home "$HOME_DIR"
                 read -p "Press Enter to continue..."
                 ;;
             3)
                 echo ""
                 echo -e "${CYAN}Available wallets on this machine:${NC}"
-                latandad keys list --keyring-backend test
+                latandad keys list --keyring-backend test --home "$HOME_DIR"
                 read -p "Press Enter to continue..."
                 ;;
             4)
                 echo ""
                 read -p "Enter wallet address (starts with ltd1...): " waddr
-                RAW_BAL=$(latandad query bank balances "$waddr" --output json 2>/dev/null || latandad query bank balances "$waddr" --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null)
+                if [[ ! "$waddr" =~ ^ltd1[a-z0-9]{38,58}$ ]]; then
+                    echo -e "${RED}Invalid wallet address format.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
+                RAW_BAL=$(latandad query bank balances "$waddr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query bank balances "$waddr" --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null)
                 balance=$(echo "$RAW_BAL" | jq -r '.balances[0].amount' 2>/dev/null)
                 if [[ -z "$balance" || "$balance" == "null" || "$balance" == "" ]]; then balance="0"; fi
                 echo -e "Balance: ${GREEN}${balance} ultd${NC}"
@@ -275,7 +345,7 @@ function create_validator() {
     check_binary || return
     print_logo
     echo -e "${YELLOW}--- Create Validator ---${NC}"
-    catch_up=$(latandad status 2>&1 | jq '.sync_info.catching_up' || echo "true")
+    catch_up=$(latandad status --home "$HOME_DIR" 2>&1 | jq -r '.sync_info.catching_up' || echo "true")
     if [[ "$catch_up" != "false" ]]; then
         echo -e "${RED}Warning: Your node is not fully synced yet! Wait until Catching Up is 'False'.${NC}"
         read -p "Press Enter to return..."
@@ -285,34 +355,50 @@ function create_validator() {
     echo -e "You will need at least ${GREEN}1,000,000 ultd${NC} testing balance for the initial delegation."
     echo ""
     read -p "Enter your wallet name (from which testnet LTD is funded): " wname
+    if ! validate_wallet_name "$wname"; then
+        echo -e "${RED}Invalid wallet name. Use letters, numbers, _ or - only.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
     read -p "Enter your Validator Moniker (Public Name): " moniker
 
     # Make JSON structure safely into validator.json
-    pubkey="$(latandad tendermint show-validator)"
-    
-    cat > validator.json << EOF
-{
-  "pubkey": $pubkey,
-  "amount": "1000000ultd",
-  "moniker": "$moniker",
-  "commission-rate": "0.10",
-  "commission-max-rate": "0.20",
-  "commission-max-change-rate": "0.01",
-  "min-self-delegation": "1"
-}
-EOF
+    if ! pubkey="$(latandad tendermint show-validator --home "$HOME_DIR" 2>/dev/null)"; then
+        echo -e "${RED}Failed to read validator pubkey from local node.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+    validator_file="$(mktemp /tmp/validator_XXXXXX.json)"
+    if ! jq -n \
+        --argjson pubkey "$pubkey" \
+        --arg moniker "$moniker" \
+        '{
+            pubkey: $pubkey,
+            amount: "1000000ultd",
+            moniker: $moniker,
+            "commission-rate": "0.10",
+            "commission-max-rate": "0.20",
+            "commission-max-change-rate": "0.01",
+            "min-self-delegation": "1"
+        }' > "$validator_file"; then
+        echo -e "${RED}Failed to generate validator JSON payload.${NC}"
+        rm -f "$validator_file" 2>/dev/null || true
+        read -p "Press Enter to return..."
+        return
+    fi
 
     broadcast_tx "create-validator for $moniker" \
-        latandad tx staking create-validator validator.json \
+        latandad tx staking create-validator "$validator_file" \
         --from "$wname" \
         --keyring-backend test \
-        --chain-id latanda-testnet-1 \
+        --chain-id "$CHAIN_ID" \
+        --home "$HOME_DIR" \
         --gas auto \
         --gas-adjustment 1.4 \
-        --fees 500ultd
+        --fees "$DEFAULT_FEES"
     
     echo -e "${GREEN}Transaction broadcasted! Check Discord and Block Explorer to verify your voting power.${NC}"
-    rm validator.json 2>/dev/null || true
+    rm -f "$validator_file" 2>/dev/null || true
     read -p "Press Enter to return..."
 }
 
@@ -333,7 +419,7 @@ function manage_gov() {
         case $opt in
             1)
                 echo -e "${CYAN}Fetching network proposals...${NC}"
-                PROPOSALS=$(latandad query gov proposals --output json 2>/dev/null || latandad query gov proposals --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null || echo '{"proposals":[]}')
+                PROPOSALS=$(latandad query gov proposals --home "$HOME_DIR" --output json 2>/dev/null || latandad query gov proposals --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null || echo '{"proposals":[]}')
                 
                 echo "$PROPOSALS" | jq -c '(.proposals // [])[] | {id: .id, status: .status, title: (.title // .messages[0].content.title), desc: (.summary // .messages[0].content.description), end: .voting_end_time}' | while read -r line; do
                     id=$(echo "$line" | jq -r '.id')
@@ -342,18 +428,18 @@ function manage_gov() {
                     desc=$(echo "$line" | jq -r '.desc' | head -c 180 | tr '\n' ' ')
                     end_time=$(echo "$line" | jq -r '.end')
                     
-                    echo -e "\n${CYAN}▎ 📋 GOV-$(printf "%03d" $id): $title${NC}"
-                    echo -e "  ▎ Status: $status"
+                    echo -e "\n${CYAN}â–Ž ðŸ“‹ GOV-$(printf "%03d" "$id"): $title${NC}"
+                    echo -e "  â–Ž Status: $status"
                     if [[ "$status" == "PROPOSAL_STATUS_VOTING_PERIOD" ]]; then
-                        echo -e "  ▎ Voting Ends: $end_time"
+                        echo -e "  â–Ž Voting Ends: $end_time"
                     fi
-                    echo -e "  ▎ "
-                    echo -e "  ▎ $desc..."
-                    echo -e "  ▎ "
+                    echo -e "  â–Ž "
+                    echo -e "  â–Ž $desc..."
+                    echo -e "  â–Ž "
                     if [[ "$status" == "PROPOSAL_STATUS_VOTING_PERIOD" ]]; then
-                        echo -e "  ▎ ${YELLOW}Vote command:${NC}"
-                        echo -e "  ▎ latandad tx gov vote $id yes --from <your-key> --keyring-backend test --chain-id latanda-testnet-1 \\"
-                        echo -e "  ▎   --fees 500ultd --gas auto -y"
+                        echo -e "  â–Ž ${YELLOW}Vote command:${NC}"
+                        echo -e "  â–Ž latandad tx gov vote $id yes --from <your-key> --keyring-backend test --chain-id latanda-testnet-1 \\"
+                        echo -e "  â–Ž   --fees 500ultd --gas auto -y"
                     fi
                 done
                 echo ""
@@ -362,17 +448,33 @@ function manage_gov() {
             2)
                 echo ""
                 read -p "Enter Proposal ID to vote on: " pid
+                if ! validate_proposal_id "$pid"; then
+                    echo -e "${RED}Invalid proposal ID.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
                 read -p "Enter your vote (yes / no / no_with_veto / abstain): " vote
+                if ! validate_vote "$vote"; then
+                    echo -e "${RED}Invalid vote option.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
                 read -p "Enter your wallet name to vote from: " wname
+                if ! validate_wallet_name "$wname"; then
+                    echo -e "${RED}Invalid wallet name.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
                 
                 broadcast_tx "vote on proposal $pid" \
                     latandad tx gov vote "$pid" "$vote" \
                     --from "$wname" \
                     --keyring-backend test \
-                    --chain-id latanda-testnet-1 \
+                    --chain-id "$CHAIN_ID" \
+                    --home "$HOME_DIR" \
                     --gas auto \
                     --gas-adjustment 1.4 \
-                    --fees 500ultd
+                    --fees "$DEFAULT_FEES"
                     
                 read -p "Press Enter to continue..."
                 ;;
@@ -382,28 +484,42 @@ function manage_gov() {
                 read -p "Enter proposal title: " ptitle
                 read -p "Enter proposal description/summary: " pdesc
                 read -p "Enter initial deposit (e.g., 1000000ultd): " pdep
+                if ! validate_deposit "$pdep"; then
+                    echo -e "${RED}Invalid deposit format. Example: 1000000ultd${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
                 read -p "Enter wallet name the proposal comes from: " wname
+                if ! validate_wallet_name "$wname"; then
+                    echo -e "${RED}Invalid wallet name.${NC}"
+                    read -p "Press Enter to continue..."
+                    continue
+                fi
 
-                cat > proposal.json << EOF
-{
-  "messages": [],
-  "metadata": "ipfs://CID",
-  "deposit": "$pdep",
-  "title": "$ptitle",
-  "summary": "$pdesc",
-  "expedited": false
-}
-EOF
+                proposal_file="$(mktemp /tmp/proposal_XXXXXX.json)"
+                jq -n \
+                    --arg pdep "$pdep" \
+                    --arg ptitle "$ptitle" \
+                    --arg pdesc "$pdesc" \
+                    '{
+                        messages: [],
+                        metadata: "ipfs://CID",
+                        deposit: $pdep,
+                        title: $ptitle,
+                        summary: $pdesc,
+                        expedited: false
+                    }' > "$proposal_file"
                 broadcast_tx "submit proposal" \
-                    latandad tx gov submit-proposal proposal.json \
+                    latandad tx gov submit-proposal "$proposal_file" \
                     --from "$wname" \
                     --keyring-backend test \
-                    --chain-id latanda-testnet-1 \
+                    --chain-id "$CHAIN_ID" \
+                    --home "$HOME_DIR" \
                     --gas auto \
                     --gas-adjustment 1.4 \
-                    --fees 500ultd
+                    --fees "$DEFAULT_FEES"
 
-                rm proposal.json 2>/dev/null || true
+                rm -f "$proposal_file" 2>/dev/null || true
                 read -p "Press Enter to continue..."
                 ;;
             0) break ;;
@@ -419,6 +535,16 @@ function show_logs() {
     print_logo
     echo -e "${GREEN}Fetching Live Logs from PM2...${NC}"
     echo -e "${YELLOW}(Press Ctrl+C to stop viewing logs and return to prompt)${NC}"
+    if ! command -v pm2 &> /dev/null; then
+        echo -e "${RED}PM2 is not installed.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+    if ! pm2 list | grep -q "latanda-chain"; then
+        echo -e "${RED}latanda-chain is not running in PM2.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
     pm2 logs latanda-chain
 }
 
@@ -459,6 +585,7 @@ BINARY       = "latandad"
 LOCAL_RPC    = "http://localhost:26657"
 GENESIS_RPC  = "http://168.231.67.201:26657"
 API_BASE     = "http://localhost:1317"
+NODE_HOME    = os.path.expanduser("~/.latanda")
 VALOPER      = "ltdvaloper1rqff4y87n39qzd4e4y4vcdawvss3e8mq8d2wqv"
 CONS_HEX     = "BE0D26EAE32F40DF14F471AA7D2F917640C264F6"
 CONS_BECH32  = "ltdvalcons1hcxjd6hr9aqd7985wx486tu3weqvye8kwdngrt"
@@ -473,7 +600,7 @@ CYN="\033[36m"; GRN="\033[32m"; YLW="\033[33m"
 RED="\033[31m"; BLU="\033[34m"; MGN="\033[35m"; WHT="\033[97m"
 
 def clr(): os.system("clear")
-def box(w): return "─" * w
+def box(w): return "â”€" * w
 
 def http_get(url, timeout=12):
     try:
@@ -486,14 +613,14 @@ def http_get(url, timeout=12):
 
 def get_local_status():
     try:
-        r   = subprocess.run([BINARY, "status"], capture_output=True, text=True, timeout=6)
+        r   = subprocess.run([BINARY, "status", "--home", NODE_HOME], capture_output=True, text=True, timeout=6)
         raw = r.stdout.strip() or r.stderr.strip()
         d   = json.loads(raw)
         si  = d.get("sync_info") or d.get("SyncInfo") or {}
         vi  = d.get("validator_info") or d.get("ValidatorInfo") or {}
-        return {"ok": True, "local": int(si.get("latest_block_height", 0)), "block_time": si.get("latest_block_time", ""), "catching_up": bool(si.get("catching_up", True)), "voting_power": vi.get("voting_power", "—")}
+        return {"ok": True, "local": int(si.get("latest_block_height", 0)), "block_time": si.get("latest_block_time", ""), "catching_up": bool(si.get("catching_up", True)), "voting_power": vi.get("voting_power", "â€”")}
     except Exception as e:
-        return {"ok": False, "error": str(e), "local": 0, "catching_up": True, "voting_power": "—"}
+        return {"ok": False, "error": str(e), "local": 0, "catching_up": True, "voting_power": "â€”"}
 
 def get_network_height():
     for rpc in [GENESIS_RPC, LOCAL_RPC]:
@@ -604,22 +731,22 @@ def calc_scores(signed, missed, local, net_h):
     sync_score = 100.0 if not net_h or net_h <= 0 else (100.0 if (net_h - local) <= 50 else max(0.0, 100.0 - (((net_h - local) - 50) * 0.15)))
     return uptime_score, sync_score, (uptime_score * 0.6) + (sync_score * 0.4)
 
-def fmt_n(n): return f"{int(n):,}".replace(",", ".") if n is not None else "—"
+def fmt_n(n): return f"{int(n):,}".replace(",", ".") if n is not None else "â€”"
 def fmt_ltd(utld): return f"{utld/1000000:,.2f} LTD".replace(",", ".")
 def fmt_dur(sec):
-    if sec is None or sec < 0: return "—"
+    if sec is None or sec < 0: return "â€”"
     sec = int(sec)
     if sec < 60: return f"{sec}s"
     if sec < 3600: return f"{sec//60}m {sec%60}s"
     h = sec // 3600; m = (sec % 3600) // 60
     return f"{h//24}d {h%24}j {m}m" if h >= 24 else f"{h}j {m}m"
-def fmt_blktime(iso): return iso[:19].replace("T", " ") if iso else "—"
+def fmt_blktime(iso): return iso[:19].replace("T", " ") if iso else "â€”"
 def pbar(pct, width=44, col=None):
     pct = max(0.0, min(100.0, pct)); filled = int(width * pct / 100)
-    return (col or (GRN if pct >= 99.9 else YLW if pct >= 85 else CYN)) + "█" * filled + DIM + "░" * (width - filled) + R
+    return (col or (GRN if pct >= 99.9 else YLW if pct >= 85 else CYN)) + "â–ˆ" * filled + DIM + "â–‘" * (width - filled) + R
 def score_col(s): return GRN if s >= 95 else YLW if s >= 80 else RED
 
-history = deque(maxlen=HISTORY_LEN); logs = deque(maxlen=60); start_ts = time.time(); net_src = "—"
+history = deque(maxlen=HISTORY_LEN); logs = deque(maxlen=60); start_ts = time.time(); net_src = "â€”"
 def add_log(msg, lvl="INFO"):
     logs.appendleft(f"{DIM}{datetime.now().strftime('%H:%M:%S')}{R} {({'OK': GRN, 'WARN': YLW, 'ERR': RED, 'INFO': BLU}.get(lvl, DIM))}[{lvl:4}]{R} {msg}")
 
@@ -635,25 +762,25 @@ def render(local_st, net_h, peers):
             dt = win[-1][0] - win[0][0]; db = win[-1][1] - win[0][1]
             if dt > 0.5 and db > 0: bps = db / dt; eta_sec = remaining / bps if remaining else None
     
-    node_status = f"{RED}{BLD}● ERROR{R}" if has_err else f"{GRN}{BLD}● SYNCED{R}" if not catching else f"{YLW}{BLD}● SYNCING{R}"
+    node_status = f"{RED}{BLD}â— ERROR{R}" if has_err else f"{GRN}{BLD}â— SYNCED{R}" if not catching else f"{YLW}{BLD}â— SYNCING{R}"
     with _sc["lock"]: signed, missed, val_start, b_done, b_pct = _sc["signed"], _sc["missed"], _sc["val_start"], _sc["backfill_done"], _sc["backfill_pct"]
     score = calc_scores(signed, missed, local, net_h)
     
     clr()
     pad = max(0, (W - 54) // 2)
-    print(f"\n{BLD}{CYN}{' '*pad}  ⬡ VALIDATOR — LA TANDA CHAIN MONITOR  {R}\n{DIM}{box(W)}{R}")
-    print(f"  {node_status}   {DIM}monitor uptime:{R} {WHT}{fmt_dur(time.time()-start_ts)}{R}   {DIM}peers:{R} {WHT}{peers or '—'}{R}\n{DIM}{box(W)}{R}\n")
-    print(f"  {BLD}{BLU}▸ VALIDATOR SCORE{R}\n  {DIM}{'─'*52}{R}")
+    print(f"\n{BLD}{CYN}{' '*pad}  â¬¡ VALIDATOR â€” LA TANDA CHAIN MONITOR  {R}\n{DIM}{box(W)}{R}")
+    print(f"  {node_status}   {DIM}monitor uptime:{R} {WHT}{fmt_dur(time.time()-start_ts)}{R}   {DIM}peers:{R} {WHT}{peers or 'â€”'}{R}\n{DIM}{box(W)}{R}\n")
+    print(f"  {BLD}{BLU}â–¸ VALIDATOR SCORE{R}\n  {DIM}{'â”€'*52}{R}")
     print(f"  {DIM}Final Score:<24{R}{score_col(score[2])}{BLD}{score[2]:.2f}/100{R}")
     print(f"  {pbar(score[2], W-6, score_col(score[2]))}\n")
     
-    print(f"  {BLD}{BLU}▸ NODE SYNC{R}\n  {DIM}{'─'*52}{R}")
+    print(f"  {BLD}{BLU}â–¸ NODE SYNC{R}\n  {DIM}{'â”€'*52}{R}")
     print(f"  {DIM}Block Lokal:<24{R}{CYN}{BLD}{fmt_n(local)}{R}   {DIM}Sisa: {fmt_n(remaining)}{R}")
     print(f"  {pbar(pct_sync, W-14)}  {BLD}{pct_sync:.2f}%{R}\n")
     
-    print(f"  {DIM}{'─'*4} Log {'─'*(W-12)}{R}")
+    print(f"  {DIM}{'â”€'*4} Log {'â”€'*(W-12)}{R}")
     for line in list(logs)[:LOG_LINES]: print(f"  {line}")
-    print(f"\n{DIM}{box(W)}{R}\n  {DIM}Ctrl+C keluar  │  screen -r latmon re-attach{R}\n")
+    print(f"\n{DIM}{box(W)}{R}\n  {DIM}Ctrl+C keluar  â”‚  screen -r latmon re-attach{R}\n")
 
 def main():
     global net_src
@@ -669,7 +796,7 @@ def main():
                     history.append((time.time(), cur)); prev_local = cur
             if tick % 3 == 0 or net_h is None:
                 nh, src = get_network_height()
-                if nh: net_h, net_src, prev_net = nh, src or "—", nh
+                if nh: net_h, net_src, prev_net = nh, src or "â€”", nh
             if tick % 4 == 0 or peers is None: peers = get_peers()
             render(local_st, net_h, peers)
             time.sleep(REFRESH_SEC)
@@ -692,20 +819,20 @@ case "\$1" in
   stop) screen -XS \$SCREEN_NAME quit 2>/dev/null && echo "Monitor dihentikan." || echo "Tidak ada session aktif." ;;
   attach|log) screen -r \$SCREEN_NAME ;;
   status) screen -list | grep \$SCREEN_NAME || echo "Monitor tidak berjalan." ;;
-  restart) screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH; echo -e "\033[32m[✓] Monitor di-restart.\033[0m" ;;
+  restart) screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH; echo -e "\033[32m[âœ“] Monitor di-restart.\033[0m" ;;
   *)
     if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
       echo -e "\033[33m[!] Monitor sudah berjalan.\033[0m"
       echo -e "    Attach  : screen -r \$SCREEN_NAME"
       echo -e "    Stop    : latmon stop"
     else
-      echo -e "\033[32m[✓] Memulai monitor...\033[0m"
+      echo -e "\033[32m[âœ“] Memulai monitor...\033[0m"
       screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH
       sleep 0.8
       if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
-        echo -e "\033[32m[✓] Berjalan! Attach dengan:\033[0m  screen -r \$SCREEN_NAME"
+        echo -e "\033[32m[âœ“] Berjalan! Attach dengan:\033[0m  screen -r \$SCREEN_NAME"
       else
-        echo -e "\033[31m[✗] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
+        echo -e "\033[31m[âœ—] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
       fi
     fi
     ;;
@@ -725,12 +852,12 @@ LAUNCHEREOF
 function uninstall_node() {
     print_logo
     echo -e "${RED}======================================================${NC}"
-    echo -e "${RED}       ⚠️  DANGER: CLEAN UNINSTALLATION ⚠️           ${NC}"
+    echo -e "${RED}       âš ï¸  DANGER: CLEAN UNINSTALLATION âš ï¸           ${NC}"
     echo -e "${RED}======================================================${NC}"
     echo -e "This will completely remove the La Tanda Node, PM2 routines,"
     echo -e "Blockchain Data, and ${RED}ALL YOUR SAVED WALLETS${NC} from this machine."
     echo ""
-    echo -e "${YELLOW}🚨 CRITICAL REMINDER: 🚨${NC}"
+    echo -e "${YELLOW}ðŸš¨ CRITICAL REMINDER: ðŸš¨${NC}"
     echo -e "Please ensure you have securely backed up your 24-word Mnemonic"
     echo -e "Phrases for all your wallets. Once wiped, they are gone FOREVER."
     echo ""
@@ -761,7 +888,7 @@ function uninstall_node() {
     sudo rm -f /usr/local/bin/latmon
     rm -rf "$HOME/.latandad-monitor"
 
-    echo -e "${GREEN}✅ Uninstallation Complete!${NC}"
+    echo -e "${GREEN}âœ… Uninstallation Complete!${NC}"
     echo -e "The La Tanda CLI and all node data have been cleanly wiped."
     exit 0
 }
@@ -799,7 +926,7 @@ function show_interactive_menu() {
 # ============================================
 # Subcommand Router
 # ============================================
-case "$1" in
+case "${1:-}" in
     status) check_status ;;
     wallet) manage_wallet ;;
     validator) create_validator ;;
@@ -807,7 +934,7 @@ case "$1" in
     logs) show_logs ;;
     monitor) 
         if command -v latmon &> /dev/null; then
-            screen -r latmon
+            latmon attach || latmon
         else
             echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 7 to install it.${NC}"
         fi
