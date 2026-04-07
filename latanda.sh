@@ -518,11 +518,28 @@ function check_validator_rewards() {
     rewards_json=$(latandad query distribution rewards "$delegator_addr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query distribution rewards "$delegator_addr" --node "$fallback_node" --output json 2>/dev/null || true)
 
     if echo "$rewards_json" | jq -e . &>/dev/null; then
-        total_ultd=$(echo "$rewards_json" | jq -r '[.rewards[]? | select(.denom == "ultd") | (.amount | tonumber)] | add // 0' 2>/dev/null || echo "0")
-        echo -e "${CYAN}Rewards Output:${NC}"
-        echo "$rewards_json" | jq '.'
-        echo ""
-        echo -e "Total ultd rewards: ${GREEN}${total_ultd}${NC}"
+        total_ultd=$(echo "$rewards_json" | jq -r '
+            def to_ultd:
+                if type == "object" then
+                    if (.denom // "") == "ultd" then (.amount | tonumber?) else empty end
+                elif type == "string" then
+                    (capture("^(?<amt>[0-9]+(?:\\.[0-9]+)?)ultd$")?.amt | tonumber?)
+                else empty end;
+            ( [ .total[]? | to_ultd ] | add ) as $t
+            | if ($t // 0) > 0 then
+                $t
+              else
+                ( [ .rewards[]?.reward[]? | to_ultd ] | add // 0 )
+              end
+        ' 2>/dev/null || echo "0")
+
+        ltd_amount=$(awk "BEGIN { printf \"%.6f\", $total_ultd / 1000000 }" 2>/dev/null || echo "0")
+        echo -e "${CYAN}Reward Summary:${NC}"
+        echo -e "Unclaimed rewards : ${GREEN}${total_ultd} ultd${NC}"
+        echo -e "Approx in LTD     : ${GREEN}${ltd_amount} LTD${NC}"
+        if [[ "$total_ultd" == "0" || "$total_ultd" == "0.0" || "$total_ultd" == "0.000000" ]]; then
+            echo -e "${YELLOW}No claimable rewards yet.${NC}"
+        fi
     else
         echo -e "${RED}Failed to query rewards.${NC}"
         echo "$rewards_json" | head -n 5
