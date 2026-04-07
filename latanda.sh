@@ -531,6 +531,16 @@ function create_validator() {
     
     echo -e "You will need at least ${GREEN}1,000,000 ultd${NC} testing balance for the initial delegation."
     echo ""
+    wallet_json=$(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null || echo '[]')
+    if ! echo "$wallet_json" | jq -e 'type=="array" and length>0' >/dev/null 2>&1; then
+        echo -e "${RED}No saved wallets found in local keyring.${NC}"
+        echo -e "Open ${YELLOW}Option 3 (Wallet Management)${NC} to create/recover wallet first."
+        read -p "Press Enter to return..."
+        return
+    fi
+    echo -e "${CYAN}Saved wallets from Option 3:${NC}"
+    echo "$wallet_json" | jq -r '.[] | "  - \(.name): \(.address)"'
+    echo ""
     read -p "Enter your wallet name (from which testnet LTD is funded): " wname
     if ! validate_wallet_name "$wname"; then
         echo -e "${RED}Invalid wallet name. Use letters, numbers, _ or - only.${NC}"
