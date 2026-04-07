@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.1 (Security Hotfix)
+# Version: 1.2 (Updater + UX Fixes)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -147,6 +147,7 @@ function self_update() {
 
     local running_script target_script tmp_script target_dir target_tmp
     local local_hash remote_hash local_version remote_version
+    local force_mode="${1:-}"
 
     running_script="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
     if command -v latman >/dev/null 2>&1; then
@@ -194,11 +195,15 @@ function self_update() {
     remote_version="$(extract_script_version "$tmp_script")"
 
     if [[ -n "$local_hash" && -n "$remote_hash" && "$local_hash" == "$remote_hash" ]]; then
-        echo -e "${GREEN}2. latest version${NC}"
-        [[ -n "$local_version" ]] && echo -e "Current version: ${CYAN}$local_version${NC}"
-        rm -f "$tmp_script"
-        read -p "Press Enter to return..."
-        return
+        if [[ "$force_mode" == "--force" || "$force_mode" == "-f" ]]; then
+            echo -e "${YELLOW}Force update requested. Reinstalling current latest script...${NC}"
+        else
+            echo -e "${GREEN}2. latest version${NC}"
+            [[ -n "$local_version" ]] && echo -e "Current version: ${CYAN}$local_version${NC}"
+            rm -f "$tmp_script"
+            read -p "Press Enter to return..."
+            return
+        fi
     fi
 
     echo -e "${YELLOW}1. update available${NC}"
@@ -1280,7 +1285,7 @@ case "${1:-}" in
             echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 7 to install it.${NC}"
         fi
         ;;
-    update) self_update ;;
+    update) self_update "${2:-}" ;;
     install) install_node ;;
     uninstall) uninstall_node ;;
     help|--help|-h)
@@ -1296,7 +1301,7 @@ case "${1:-}" in
         echo "    gov         - Manage governance proposals"
         echo "    logs        - View live pm2 logs"
         echo "    monitor     - Attach to advanced python monitor"
-        echo "    update      - Check latest script and auto-update latman"
+        echo "    update [--force] - Check latest script and auto-update latman"
         echo "    install     - Install node and run with PM2"
         echo "    uninstall   - Cleanly wipe the node, data, and CLI manager"
         ;;
