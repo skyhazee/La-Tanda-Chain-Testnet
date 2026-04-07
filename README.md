@@ -22,10 +22,12 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - `latman status` : Check node sync progress and validation status.
 - `latman wallet` : Jump straight into wallet creation & balance checker.
 - `latman validator` : Create a validator instantly.
+- `latman rewards` : Check validator rewards with auto-detected validator wallet/address.
 - `latman gov`   : View beautifully formatted active proposals and cast your vote.
 - `latman logs`   : Stream real-time node outputs via PM2.
-- `latman monitor`: Attach to the Advanced Python UI (SkyHaze monitor).
+- `latman monitor`: Attach to the advanced Python monitor UI.
 - `latman uninstall`: Safely stop processes and wipe the node completely.
+
 ## Step-by-Step Guide for Beginners
 
 ### 1. Install and Sync Your Node
@@ -37,6 +39,9 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - Once your node is synced, open the manager and select **Option 3 (Wallet Management)**, then choose **Option 1 (Create New Wallet)**.
 - Input a wallet name and securely back up your 24-word mnemonic phrase.
 - Copy your generated wallet address (starts with `ltd1...`).
+- To check balance, use **Option 4 (Check Wallet Balance)** and choose either:
+  - manual address input, or
+  - select from saved wallets.
 - Join the official La Tanda Discord server and post your address in the appropriate channel to request testnet funds (LTD tokens) needed to become a validator.
 
 ### 3. Join as a Validator
@@ -45,10 +50,21 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - Provide your wallet name and your desired validator moniker (public name).
 - The transaction will be securely broadcasted, and you should now be active on the network.
 
-### 4. Advanced Monitor Setup
+### 4. Check Validator Rewards
+After your validator is active, you can check rewards directly from the manager:
+
+- Use **Option 5 (Check Validator Rewards)** from the main menu, or run `latman rewards`.
+- The script auto-detects the registered validator wallet/address from your local keyring.
+- Reward query command used:
+
+```bash
+latandad query distribution rewards <auto-detected-ltd-address> --home ~/.latanda
+```
+
+### 5. Advanced Monitor Setup
 This script includes an advanced Python-based dashboard providing real-time analytics on your validator's performance, including uptime, signing rate, block sync score, and backfill scanning.
 
-- To configure it, select **Option 7 (Install & Run Advanced Monitor)** from the main menu.
+- To configure it, select **Option 8 (Install & Run Advanced Monitor)** from the main menu.
 - The script will configure everything and create a native command on your server called `latmon`.
 - To view the dashboard, return to your normal server terminal and type: `screen -r latmon`
 - To safely detach from the dashboard without closing it, press **Ctrl+A** followed by **D**.
