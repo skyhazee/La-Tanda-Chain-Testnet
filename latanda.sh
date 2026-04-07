@@ -519,21 +519,38 @@ function check_validator_rewards() {
 
     if echo "$rewards_json" | jq -e . &>/dev/null; then
         total_ultd=$(echo "$rewards_json" | jq -r '
-            def to_ultd:
-                if type == "object" then
-                    if (.denom // "") == "ultd" then (.amount | tonumber?) else empty end
-                elif type == "string" then
-                    (capture("^(?<amt>[0-9]+(?:\\.[0-9]+)?)ultd$")?.amt | tonumber?)
-                else empty end;
-            ( [ .total[]? | to_ultd ] | add ) as $t
-            | if ($t // 0) > 0 then
-                $t
-              else
-                ( [ .rewards[]?.reward[]? | to_ultd ] | add // 0 )
-              end
-        ' 2>/dev/null || echo "0")
+            .total[]?
+            | if type == "object" and (.denom // "") == "ultd" then (.amount // "")
+              elif type == "string" then .
+              else empty end
+        ' 2>/dev/null | awk '
+            BEGIN { sum = 0 }
+            {
+                gsub(/[[:space:]]/, "", $0)
+                if ($0 ~ /^[0-9]+(\.[0-9]+)?ultd$/) { sub(/ultd$/, "", $0); sum += $0 }
+                else if ($0 ~ /^[0-9]+(\.[0-9]+)?$/) { sum += $0 }
+            }
+            END { printf "%.6f", sum }
+        ')
 
-        ltd_amount=$(awk "BEGIN { printf \"%.6f\", $total_ultd / 1000000 }" 2>/dev/null || echo "0")
+        if [[ -z "$total_ultd" || "$total_ultd" == "0.000000" ]]; then
+            total_ultd=$(echo "$rewards_json" | jq -r '
+                .rewards[]?.reward[]?
+                | if type == "object" and (.denom // "") == "ultd" then (.amount // "")
+                  elif type == "string" then .
+                  else empty end
+            ' 2>/dev/null | awk '
+                BEGIN { sum = 0 }
+                {
+                    gsub(/[[:space:]]/, "", $0)
+                    if ($0 ~ /^[0-9]+(\.[0-9]+)?ultd$/) { sub(/ultd$/, "", $0); sum += $0 }
+                    else if ($0 ~ /^[0-9]+(\.[0-9]+)?$/) { sum += $0 }
+                }
+                END { printf "%.6f", sum }
+            ')
+        fi
+
+        ltd_amount=$(awk -v amount="$total_ultd" 'BEGIN { printf "%.6f", amount / 1000000 }' 2>/dev/null || echo "0")
         echo -e "${CYAN}Reward Summary:${NC}"
         echo -e "Unclaimed rewards : ${GREEN}${total_ultd} ultd${NC}"
         echo -e "Approx in LTD     : ${GREEN}${ltd_amount} LTD${NC}"
