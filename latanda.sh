@@ -526,6 +526,13 @@ function create_validator() {
         read -p "Press Enter to return..."
         return
     fi
+    wallet_addr=$(latandad keys show "$wname" --keyring-backend test --home "$HOME_DIR" -a 2>/dev/null || true)
+    wallet_valoper=$(latandad keys show "$wname" --bech val --keyring-backend test --home "$HOME_DIR" -a 2>/dev/null || true)
+    if [[ -z "$wallet_addr" ]]; then
+        echo -e "${RED}Failed to read wallet address for '$wname'.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
     read -p "Enter your Validator Moniker (Public Name): " moniker
 
     # Make JSON structure safely into validator.json
@@ -552,6 +559,14 @@ function create_validator() {
         read -p "Press Enter to return..."
         return
     fi
+
+    echo ""
+    echo -e "${CYAN}Creating validator using saved wallet from Option 3:${NC}"
+    echo -e "  Wallet Name    : ${GREEN}${wname}${NC}"
+    echo -e "  Wallet Address : ${CYAN}${wallet_addr}${NC}"
+    [[ -n "$wallet_valoper" ]] && echo -e "  Valoper        : ${CYAN}${wallet_valoper}${NC}"
+    echo -e "  Moniker        : ${GREEN}${moniker}${NC}"
+    echo ""
 
     if broadcast_tx "create-validator for $moniker" \
         latandad tx staking create-validator "$validator_file" \
