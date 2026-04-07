@@ -403,7 +403,82 @@ function create_validator() {
 }
 
 # ============================================
-# Option 5: Governance
+# Option 5: Check Validator Rewards
+# ============================================
+function check_validator_rewards() {
+    check_binary || return
+    print_logo
+    echo -e "${YELLOW}--- Check Validator Rewards ---${NC}"
+    echo ""
+
+    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+    local cons_pubkey cons_key validators_json valoper_addr delegator_addr rewards_json total_ultd
+    local key_name key_valoper
+
+    cons_pubkey=$(latandad tendermint show-validator --home "$HOME_DIR" 2>/dev/null || latandad comet show-validator --home "$HOME_DIR" 2>/dev/null || true)
+    cons_key=$(echo "$cons_pubkey" | jq -r '.key // empty' 2>/dev/null || true)
+
+    if [[ -z "$cons_key" ]]; then
+        echo -e "${RED}Failed to detect local validator consensus pubkey.${NC}"
+        echo "Make sure this machine has initialized validator data in $HOME_DIR."
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    validators_json=$(latandad query staking validators --home "$HOME_DIR" --output json 2>/dev/null || latandad query staking validators --node "$fallback_node" --output json 2>/dev/null || echo '{"validators":[]}')
+    valoper_addr=$(echo "$validators_json" | jq -r --arg key "$cons_key" '(.validators // [])[] | select((.consensus_pubkey.key // "") == $key) | .operator_address' 2>/dev/null | head -n 1)
+
+    if [[ -z "$valoper_addr" || "$valoper_addr" == "null" ]]; then
+        echo -e "${RED}Validator operator address could not be auto-detected.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    while IFS= read -r key_name; do
+        [[ -z "$key_name" ]] && continue
+        key_valoper=$(latandad keys show "$key_name" --bech val --keyring-backend test --home "$HOME_DIR" -a 2>/dev/null || true)
+        if [[ "$key_valoper" == "$valoper_addr" ]]; then
+            delegator_addr=$(latandad keys show "$key_name" --keyring-backend test --home "$HOME_DIR" -a 2>/dev/null || true)
+            break
+        fi
+    done < <(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null | jq -r '.[]?.name' 2>/dev/null || true)
+
+    if [[ -z "$delegator_addr" ]]; then
+        delegator_addr=$(latandad query staking validator-delegations "$valoper_addr" --home "$HOME_DIR" --output json 2>/dev/null | jq -r '[.delegation_responses[]? | {d: .delegation.delegator_address, s: (.delegation.shares | tonumber)}] | max_by(.s).d // empty' 2>/dev/null || true)
+    fi
+
+    if [[ -z "$delegator_addr" || "$delegator_addr" == "null" ]]; then
+        echo -e "${RED}Delegator address for this validator could not be auto-detected.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    echo -e "Validator operator : ${CYAN}${valoper_addr}${NC}"
+    echo -e "Delegator address  : ${CYAN}${delegator_addr}${NC}"
+    echo ""
+
+    rewards_json=$(latandad query distribution rewards "$delegator_addr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query distribution rewards "$delegator_addr" --node "$fallback_node" --output json 2>/dev/null || true)
+
+    if echo "$rewards_json" | jq -e . &>/dev/null; then
+        total_ultd=$(echo "$rewards_json" | jq -r '[.rewards[]? | select(.denom == "ultd") | (.amount | tonumber)] | add // 0' 2>/dev/null || echo "0")
+        echo -e "${CYAN}Rewards Output:${NC}"
+        echo "$rewards_json" | jq '.'
+        echo ""
+        echo -e "Total ultd rewards: ${GREEN}${total_ultd}${NC}"
+    else
+        echo -e "${RED}Failed to query rewards.${NC}"
+        echo "$rewards_json" | head -n 5
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Command used:${NC}"
+    echo "latandad query distribution rewards $delegator_addr --home ~/.latanda"
+    echo ""
+    read -p "Press Enter to return..."
+}
+
+# ============================================
+# Option 6: Governance
 # ============================================
 function manage_gov() {
     check_binary || return
@@ -529,7 +604,7 @@ function manage_gov() {
 }
 
 # ============================================
-# Option 6: Logs
+# Option 7: Logs
 # ============================================
 function show_logs() {
     print_logo
@@ -549,7 +624,7 @@ function show_logs() {
 }
 
 # ============================================
-# Option 7: Install Advanced Monitor 
+# Option 8: Install Advanced Monitor 
 # ============================================
 function install_advanced_monitor() {
     print_logo
@@ -847,7 +922,7 @@ LAUNCHEREOF
 }
 
 # ============================================
-# Option 8: Clean Uninstall
+# Option 9: Clean Uninstall
 # ============================================
 function uninstall_node() {
     print_logo
@@ -900,23 +975,25 @@ function show_interactive_menu() {
         echo "2) Check Node Status & Sync Progress"
         echo "3) Wallet Management"
         echo "4) Create Validator (Stake on Network)"
-        echo "5) Governance Actions (Vote / Propose)"
-        echo "6) View Live Logs"
-        echo "7) Install & Run Advanced Monitor"
-        echo "8) Clean Uninstall Node & Manager"
+        echo "5) Check Validator Rewards"
+        echo "6) Governance Actions (Vote / Propose)"
+        echo "7) View Live Logs"
+        echo "8) Install & Run Advanced Monitor"
+        echo "9) Clean Uninstall Node & Manager"
         echo "0) Exit Manager"
         echo "---------------------------------------------------"
-        read -p "Please select an option [0-8]: " choice
+        read -p "Please select an option [0-9]: " choice
 
         case $choice in
             1) install_node ;;
             2) check_status ;;
             3) manage_wallet ;;
             4) create_validator ;;
-            5) manage_gov ;;
-            6) show_logs ;;
-            7) install_advanced_monitor ;;
-            8) uninstall_node ;;
+            5) check_validator_rewards ;;
+            6) manage_gov ;;
+            7) show_logs ;;
+            8) install_advanced_monitor ;;
+            9) uninstall_node ;;
             0) echo -e "${CYAN}Exiting La Tanda Manager. See you next time!${NC}"; exit 0 ;;
             *) echo -e "${RED}Invalid feature! Select a valid number.${NC}"; sleep 1 ;;
         esac
@@ -930,6 +1007,7 @@ case "${1:-}" in
     status) check_status ;;
     wallet) manage_wallet ;;
     validator) create_validator ;;
+    rewards) check_validator_rewards ;;
     gov) manage_gov ;;
     logs) show_logs ;;
     monitor) 
@@ -950,6 +1028,7 @@ case "${1:-}" in
         echo "    status      - Check node status and sync progress"
         echo "    wallet      - Manage wallets"
         echo "    validator   - Create or check validator"
+        echo "    rewards     - Check validator rewards (auto-detect validator address)"
         echo "    gov         - Manage governance proposals"
         echo "    logs        - View live pm2 logs"
         echo "    monitor     - Attach to advanced python monitor"
