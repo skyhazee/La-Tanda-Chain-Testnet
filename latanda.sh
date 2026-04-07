@@ -145,7 +145,7 @@ function self_update() {
     echo -e "${YELLOW}--- Latman Self Update ---${NC}"
     echo ""
 
-    local running_script target_script tmp_script
+    local running_script target_script tmp_script target_dir target_tmp
     local local_hash remote_hash local_version remote_version
 
     running_script="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
@@ -207,24 +207,41 @@ function self_update() {
     echo -e "${CYAN}Applying update to: ${target_script}${NC}"
 
     chmod +x "$tmp_script"
-    if [[ -w "$target_script" ]]; then
-        cp "$tmp_script" "$target_script"
-    else
-        if ! sudo cp "$tmp_script" "$target_script"; then
+    target_dir="$(dirname "$target_script")"
+    target_tmp="${target_dir}/.latman_update_$$.sh"
+
+    # Use atomic replace (mv) to avoid corrupting a script while it's running.
+    if [[ -w "$target_dir" ]]; then
+        if ! cp "$tmp_script" "$target_tmp"; then
             rm -f "$tmp_script"
-            echo -e "${RED}Update failed: no permission to write ${target_script}.${NC}"
+            echo -e "${RED}Update failed: cannot stage update file in ${target_dir}.${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
+        chmod +x "$target_tmp" >/dev/null 2>&1 || true
+        if ! mv -f "$target_tmp" "$target_script"; then
+            rm -f "$tmp_script" "$target_tmp"
+            echo -e "${RED}Update failed: cannot replace ${target_script}.${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
+    else
+        if ! sudo cp "$tmp_script" "$target_tmp"; then
+            rm -f "$tmp_script"
+            echo -e "${RED}Update failed: no permission to write ${target_dir}.${NC}"
             echo -e "${YELLOW}Try: sudo latman update${NC}"
             read -p "Press Enter to return..."
             return
         fi
-    fi
-
-    if [[ -x "$target_script" ]]; then
-        :
-    elif [[ -w "$target_script" ]]; then
-        chmod +x "$target_script"
-    else
-        sudo chmod +x "$target_script" >/dev/null 2>&1 || true
+        sudo chmod +x "$target_tmp" >/dev/null 2>&1 || true
+        if ! sudo mv -f "$target_tmp" "$target_script"; then
+            rm -f "$tmp_script"
+            sudo rm -f "$target_tmp" >/dev/null 2>&1 || true
+            echo -e "${RED}Update failed: cannot replace ${target_script}.${NC}"
+            echo -e "${YELLOW}Try: sudo latman update${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
     fi
 
     rm -f "$tmp_script"
