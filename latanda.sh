@@ -63,33 +63,39 @@ function broadcast_tx() {
     output=$("$@" -y --output json 2>&1 || true)
 
     if echo "$output" | jq -e . &>/dev/null; then
-        local code=$(echo "$output" | jq -r '.code')
-        local txhash=$(echo "$output" | jq -r '.txhash')
-        local raw_log=$(echo "$output" | jq -r '.raw_log')
+        local code
+        local txhash
+        local raw_log
+        code=$(echo "$output" | jq -r '(.code // 0) | tostring')
+        txhash=$(echo "$output" | jq -r '.txhash // empty')
+        raw_log=$(echo "$output" | jq -r '.raw_log // empty')
 
         if [[ "$code" == "0" ]]; then
-            echo -e "\n  ${GREEN}âœ… Transaction Successful!${NC}"
-            echo -e "  TX Hash: ${CYAN}$txhash${NC}"
+            echo -e "\n  ${GREEN}[OK] Transaction successful.${NC}"
+            [[ -n "$txhash" ]] && echo -e "  TX Hash: ${CYAN}$txhash${NC}"
             echo -e "  (You can verify this hash on the explorer)"
             echo ""
+            return 0
         else
-            echo -e "\n  ${RED}âŒ Transaction Failed!${NC}"
+            echo -e "\n  ${RED}[FAIL] Transaction failed.${NC}"
             echo -e "  Error Code: $code"
-            echo -e "  Reason: $raw_log"
+            [[ -n "$raw_log" ]] && echo -e "  Reason: $raw_log"
             echo ""
+            return 1
         fi
     else
-        echo -e "${RED}âŒ Execution Failed!${NC}"
-        echo -e "$output" | head -n 5
+        echo -e "${RED}[FAIL] Command execution failed before broadcast.${NC}"
+        echo "$output" | head -n 8
+        echo ""
+        return 1
     fi
 }
-
 # ============================================
 # Binary Checker
 # ============================================
 function check_binary() {
     if ! command -v latandad &> /dev/null; then
-        echo -e "\n${RED}âŒ Error: 'latandad' binary is NOT installed on this machine!${NC}"
+        echo -e "\n${RED}Error: 'latandad' binary is NOT installed on this machine!${NC}"
         echo -e "You must install the node first before using this feature."
         echo -e "Please select ${YELLOW}Option 1 (Install Node & Run)${NC} from the main menu."
         echo ""
@@ -514,6 +520,12 @@ function create_validator() {
         read -p "Press Enter to return..."
         return
     fi
+    if ! latandad keys show "$wname" --keyring-backend test --home "$HOME_DIR" -a >/dev/null 2>&1; then
+        echo -e "${RED}Wallet '$wname' not found in local keyring.${NC}"
+        echo -e "Open ${YELLOW}Option 3 (Wallet Management)${NC} to create/recover/list wallets first."
+        read -p "Press Enter to return..."
+        return
+    fi
     read -p "Enter your Validator Moniker (Public Name): " moniker
 
     # Make JSON structure safely into validator.json
@@ -541,7 +553,7 @@ function create_validator() {
         return
     fi
 
-    broadcast_tx "create-validator for $moniker" \
+    if broadcast_tx "create-validator for $moniker" \
         latandad tx staking create-validator "$validator_file" \
         --from "$wname" \
         --keyring-backend test \
@@ -549,9 +561,11 @@ function create_validator() {
         --home "$HOME_DIR" \
         --gas auto \
         --gas-adjustment 1.4 \
-        --fees "$DEFAULT_FEES"
-    
-    echo -e "${GREEN}Transaction broadcasted! Check Discord and Block Explorer to verify your voting power.${NC}"
+        --fees "$DEFAULT_FEES"; then
+        echo -e "${GREEN}Validator creation submitted. Wait a bit, then check status/rewards.${NC}"
+    else
+        echo -e "${RED}Validator creation failed. Please read the error above and try again.${NC}"
+    fi
     rm -f "$validator_file" 2>/dev/null || true
     read -p "Press Enter to return..."
 }
@@ -744,7 +758,7 @@ function manage_gov() {
                     continue
                 fi
                 
-                broadcast_tx "vote on proposal $pid" \
+                if ! broadcast_tx "vote on proposal $pid" \
                     latandad tx gov vote "$pid" "$vote" \
                     --from "$wname" \
                     --keyring-backend test \
@@ -752,7 +766,9 @@ function manage_gov() {
                     --home "$HOME_DIR" \
                     --gas auto \
                     --gas-adjustment 1.4 \
-                    --fees "$DEFAULT_FEES"
+                    --fees "$DEFAULT_FEES"; then
+                    echo -e "${RED}Vote transaction failed.${NC}"
+                fi
                     
                 read -p "Press Enter to continue..."
                 ;;
@@ -787,7 +803,7 @@ function manage_gov() {
                         summary: $pdesc,
                         expedited: false
                     }' > "$proposal_file"
-                broadcast_tx "submit proposal" \
+                if ! broadcast_tx "submit proposal" \
                     latandad tx gov submit-proposal "$proposal_file" \
                     --from "$wname" \
                     --keyring-backend test \
@@ -795,7 +811,9 @@ function manage_gov() {
                     --home "$HOME_DIR" \
                     --gas auto \
                     --gas-adjustment 1.4 \
-                    --fees "$DEFAULT_FEES"
+                    --fees "$DEFAULT_FEES"; then
+                    echo -e "${RED}Submit proposal transaction failed.${NC}"
+                fi
 
                 rm -f "$proposal_file" 2>/dev/null || true
                 read -p "Press Enter to continue..."
