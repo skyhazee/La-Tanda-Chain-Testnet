@@ -24,6 +24,7 @@ GO_TARBALL="/tmp/go.tar.gz"
 GO_SHA256="cb2396bae64183cdccce6c8e145b44f26b4a8c5e5c3ddc56b79f5bab60f41f4e"
 # Set this to expected SHA256 to enforce source integrity verification.
 SOURCE_SHA256="ba73d41a8f5ba146e90dc8af8fd60fdd3279fdec6f9fdbb026942c19751143dc"
+LATMAN_UPDATE_URL="https://raw.githubusercontent.com/skyhazee/La-Tanda-Chain-Testnet/main/latanda.sh"
 
 # ============================================
 # Theme & Colors 
@@ -114,6 +115,116 @@ function verify_checksum() {
         return 1
     fi
     return 0
+}
+
+function extract_script_version() {
+    local file="$1"
+    grep -m1 '^# Version:' "$file" 2>/dev/null | sed 's/^# Version:[[:space:]]*//' || true
+}
+
+function file_sha256() {
+    local file="$1"
+    [[ -f "$file" ]] || { echo ""; return 0; }
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" 2>/dev/null | awk '{print $1}' || true
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" 2>/dev/null | awk '{print $1}' || true
+    else
+        echo ""
+    fi
+}
+
+function self_update() {
+    print_logo
+    echo -e "${YELLOW}--- Latman Self Update ---${NC}"
+    echo ""
+
+    local running_script target_script tmp_script
+    local local_hash remote_hash local_version remote_version
+
+    running_script="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    if command -v latman >/dev/null 2>&1; then
+        target_script="$(readlink -f "$(command -v latman)" 2>/dev/null || command -v latman)"
+    else
+        target_script="$running_script"
+    fi
+
+    tmp_script="$(mktemp /tmp/latman_update_XXXXXX.sh)"
+    if command -v curl >/dev/null 2>&1; then
+        if ! curl -fsSL "$LATMAN_UPDATE_URL" -o "$tmp_script"; then
+            rm -f "$tmp_script"
+            echo -e "${RED}Failed to fetch update from GitHub.${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if ! wget -q "$LATMAN_UPDATE_URL" -O "$tmp_script"; then
+            rm -f "$tmp_script"
+            echo -e "${RED}Failed to fetch update from GitHub.${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
+    else
+        rm -f "$tmp_script"
+        echo -e "${RED}curl/wget not found. Cannot check updates.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if ! bash -n "$tmp_script" >/dev/null 2>&1; then
+        rm -f "$tmp_script"
+        echo -e "${RED}Downloaded update is invalid (bash syntax check failed).${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if [[ -f "$target_script" ]]; then
+        local_hash="$(file_sha256 "$target_script")"
+    else
+        local_hash=""
+    fi
+    remote_hash="$(file_sha256 "$tmp_script")"
+    local_version="$(extract_script_version "$target_script")"
+    remote_version="$(extract_script_version "$tmp_script")"
+
+    if [[ -n "$local_hash" && -n "$remote_hash" && "$local_hash" == "$remote_hash" ]]; then
+        echo -e "${GREEN}2. latest version${NC}"
+        [[ -n "$local_version" ]] && echo -e "Current version: ${CYAN}$local_version${NC}"
+        rm -f "$tmp_script"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    echo -e "${YELLOW}1. update available${NC}"
+    [[ -n "$local_version" ]] && echo -e "Current version: ${CYAN}${local_version}${NC}"
+    [[ -n "$remote_version" ]] && echo -e "Latest version : ${GREEN}${remote_version}${NC}"
+    echo -e "${CYAN}Applying update to: ${target_script}${NC}"
+
+    chmod +x "$tmp_script"
+    if [[ -w "$target_script" ]]; then
+        cp "$tmp_script" "$target_script"
+    else
+        if ! sudo cp "$tmp_script" "$target_script"; then
+            rm -f "$tmp_script"
+            echo -e "${RED}Update failed: no permission to write ${target_script}.${NC}"
+            echo -e "${YELLOW}Try: sudo latman update${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
+    fi
+
+    if [[ -x "$target_script" ]]; then
+        :
+    elif [[ -w "$target_script" ]]; then
+        chmod +x "$target_script"
+    else
+        sudo chmod +x "$target_script" >/dev/null 2>&1 || true
+    fi
+
+    rm -f "$tmp_script"
+    echo -e "${GREEN}Update completed successfully.${NC}"
+    echo -e "${CYAN}Node process is not restarted. Running node remains unaffected.${NC}"
+    read -p "Press Enter to return..."
 }
 
 function validate_wallet_name() {
@@ -1109,6 +1220,7 @@ case "${1:-}" in
             echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 7 to install it.${NC}"
         fi
         ;;
+    update) self_update ;;
     install) install_node ;;
     uninstall) uninstall_node ;;
     help|--help|-h)
@@ -1124,6 +1236,7 @@ case "${1:-}" in
         echo "    gov         - Manage governance proposals"
         echo "    logs        - View live pm2 logs"
         echo "    monitor     - Attach to advanced python monitor"
+        echo "    update      - Check latest script and auto-update latman"
         echo "    install     - Install node and run with PM2"
         echo "    uninstall   - Cleanly wipe the node, data, and CLI manager"
         ;;
