@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================
-# La Tanda Chain â€” Interactive Node Manager
+# La Tanda Chain - Interactive Node Manager
 # Version: 1.1 (Security Hotfix)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
@@ -46,7 +46,7 @@ function print_logo() {
     echo " | |__ / _\` | | |/ _\` | ' \\/ _\` / _\` | "
     echo " |____|\__,_| |_|\__,_|_||_\__,_\__,_| "
     echo "                                        "
-    echo "  Chain Node Manager â€” latanda-testnet-1 "
+    echo "  Chain Node Manager - latanda-testnet-1 "
     echo -e "${NC}"
 }
 
@@ -706,19 +706,19 @@ function manage_gov() {
                     desc=$(echo "$line" | jq -r '.desc' | head -c 180 | tr '\n' ' ')
                     end_time=$(echo "$line" | jq -r '.end')
                     
-                    echo -e "\n${CYAN}â–Ž ðŸ“‹ GOV-$(printf "%03d" "$id"): $title${NC}"
-                    echo -e "  â–Ž Status: $status"
+                    echo -e "\n${CYAN}- GOV-$(printf "%03d" "$id"): $title${NC}"
+                    echo -e "  - Status: ${status#PROPOSAL_STATUS_}"
                     if [[ "$status" == "PROPOSAL_STATUS_VOTING_PERIOD" ]]; then
-                        echo -e "  â–Ž Voting Ends: $end_time"
+                        echo -e "  - Voting Ends: $end_time"
                     fi
-                    echo -e "  â–Ž "
-                    echo -e "  â–Ž $desc..."
-                    echo -e "  â–Ž "
+                    echo -e "  - $desc..."
                     if [[ "$status" == "PROPOSAL_STATUS_VOTING_PERIOD" ]]; then
-                        echo -e "  â–Ž ${YELLOW}Vote command:${NC}"
-                        echo -e "  â–Ž latandad tx gov vote $id yes --from <your-key> --keyring-backend test --chain-id latanda-testnet-1 \\"
-                        echo -e "  â–Ž   --fees 500ultd --gas auto -y"
+                        echo -e "  - ${YELLOW}Vote command:${NC}"
+                        echo -e "  - latandad tx gov vote $id yes --from <your-key> --keyring-backend test --chain-id latanda-testnet-1 \\"
+                        echo -e "  -   --fees 500ultd --gas auto -y"
                     fi
+
+
                 done
                 echo ""
                 read -p "Press Enter to continue..."
