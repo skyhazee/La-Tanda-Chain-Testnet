@@ -320,7 +320,50 @@ function manage_wallet() {
                 ;;
             4)
                 echo ""
-                read -p "Enter wallet address (starts with ltd1...): " waddr
+                echo "1. Enter wallet address manually"
+                echo "2. Select from saved wallets"
+                read -p "Select method [1-2]: " balopt
+
+                waddr=""
+                case "$balopt" in
+                    1)
+                        read -p "Enter wallet address (starts with ltd1...): " waddr
+                        ;;
+                    2)
+                        wallet_json=$(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null || echo '[]')
+                        if ! echo "$wallet_json" | jq -e 'type=="array" and length>0' >/dev/null 2>&1; then
+                            echo -e "${RED}No saved wallets found.${NC}"
+                            read -p "Press Enter to continue..."
+                            continue
+                        fi
+                        echo -e "${CYAN}Saved wallets:${NC}"
+                        i=1
+                        while IFS=$'\t' read -r n a; do
+                            echo "  $i) $n - $a"
+                            i=$((i+1))
+                        done < <(echo "$wallet_json" | jq -r '.[] | [.name, .address] | @tsv' 2>/dev/null)
+                        read -p "Select wallet number: " pick
+                        if [[ ! "$pick" =~ ^[0-9]+$ ]]; then
+                            echo -e "${RED}Invalid selection.${NC}"
+                            read -p "Press Enter to continue..."
+                            continue
+                        fi
+                        waddr=$(echo "$wallet_json" | jq -r --argjson idx "$((pick-1))" '.[$idx].address // empty' 2>/dev/null || true)
+                        wname=$(echo "$wallet_json" | jq -r --argjson idx "$((pick-1))" '.[$idx].name // empty' 2>/dev/null || true)
+                        if [[ -z "$waddr" ]]; then
+                            echo -e "${RED}Invalid selection.${NC}"
+                            read -p "Press Enter to continue..."
+                            continue
+                        fi
+                        echo -e "Selected wallet: ${GREEN}${wname}${NC} (${CYAN}${waddr}${NC})"
+                        ;;
+                    *)
+                        echo -e "${RED}Invalid option.${NC}"
+                        read -p "Press Enter to continue..."
+                        continue
+                        ;;
+                esac
+
                 if [[ ! "$waddr" =~ ^ltd1[a-z0-9]{38,58}$ ]]; then
                     echo -e "${RED}Invalid wallet address format.${NC}"
                     read -p "Press Enter to continue..."
@@ -412,49 +455,64 @@ function check_validator_rewards() {
     echo ""
 
     local fallback_node="https://t-latanda.rpc.utsa.tech:443"
-    local cons_pubkey cons_key validators_json valoper_addr delegator_addr rewards_json total_ultd
-    local key_name key_valoper
+    local rewards_json total_ultd wallet_json validator_name delegator_addr valoper_addr selected_idx
+    local key_name key_addr key_valoper validator_json
+    local -a wallet_names=()
+    local -a wallet_addrs=()
+    local -a wallet_valopers=()
 
-    cons_pubkey=$(latandad tendermint show-validator --home "$HOME_DIR" 2>/dev/null || latandad comet show-validator --home "$HOME_DIR" 2>/dev/null || true)
-    cons_key=$(echo "$cons_pubkey" | jq -r '.key // empty' 2>/dev/null || true)
-
-    if [[ -z "$cons_key" ]]; then
-        echo -e "${RED}Failed to detect local validator consensus pubkey.${NC}"
-        echo "Make sure this machine has initialized validator data in $HOME_DIR."
+    wallet_json=$(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null || echo '[]')
+    if ! echo "$wallet_json" | jq -e 'type=="array" and length>0' >/dev/null 2>&1; then
+        echo -e "${RED}No saved wallets found in keyring.${NC}"
         read -p "Press Enter to return..."
         return
     fi
 
-    validators_json=$(latandad query staking validators --home "$HOME_DIR" --output json 2>/dev/null || latandad query staking validators --node "$fallback_node" --output json 2>/dev/null || echo '{"validators":[]}')
-    valoper_addr=$(echo "$validators_json" | jq -r --arg key "$cons_key" '(.validators // [])[] | select((.consensus_pubkey.key // "") == $key) | .operator_address' 2>/dev/null | head -n 1)
-
-    if [[ -z "$valoper_addr" || "$valoper_addr" == "null" ]]; then
-        echo -e "${RED}Validator operator address could not be auto-detected.${NC}"
-        read -p "Press Enter to return..."
-        return
-    fi
-
-    while IFS= read -r key_name; do
+    while IFS=$'\t' read -r key_name key_addr; do
         [[ -z "$key_name" ]] && continue
+        wallet_names+=("$key_name")
+        wallet_addrs+=("$key_addr")
         key_valoper=$(latandad keys show "$key_name" --bech val --keyring-backend test --home "$HOME_DIR" -a 2>/dev/null || true)
-        if [[ "$key_valoper" == "$valoper_addr" ]]; then
-            delegator_addr=$(latandad keys show "$key_name" --keyring-backend test --home "$HOME_DIR" -a 2>/dev/null || true)
+        wallet_valopers+=("$key_valoper")
+    done < <(echo "$wallet_json" | jq -r '.[] | [.name, .address] | @tsv' 2>/dev/null || true)
+
+    for i in "${!wallet_names[@]}"; do
+        key_valoper="${wallet_valopers[$i]}"
+        [[ -z "$key_valoper" ]] && continue
+        validator_json=$(latandad query staking validator "$key_valoper" --home "$HOME_DIR" --output json 2>/dev/null || latandad query staking validator "$key_valoper" --node "$fallback_node" --output json 2>/dev/null || true)
+        if echo "$validator_json" | jq -e --arg v "$key_valoper" '.validator.operator_address? == $v' >/dev/null 2>&1; then
+            validator_name="${wallet_names[$i]}"
+            delegator_addr="${wallet_addrs[$i]}"
+            valoper_addr="$key_valoper"
             break
         fi
-    done < <(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null | jq -r '.[]?.name' 2>/dev/null || true)
+    done
 
-    if [[ -z "$delegator_addr" ]]; then
-        delegator_addr=$(latandad query staking validator-delegations "$valoper_addr" --home "$HOME_DIR" --output json 2>/dev/null | jq -r '[.delegation_responses[]? | {d: .delegation.delegator_address, s: (.delegation.shares | tonumber)}] | max_by(.s).d // empty' 2>/dev/null || true)
+    if [[ -z "${delegator_addr:-}" ]]; then
+        echo -e "${YELLOW}Validator wallet could not be auto-detected.${NC}"
+        echo -e "${YELLOW}Select wallet manually:${NC}"
+        j=1
+        for i in "${!wallet_names[@]}"; do
+            echo "  $j) ${wallet_names[$i]} - ${wallet_addrs[$i]}"
+            j=$((j+1))
+        done
+        read -p "Select wallet number: " selected_idx
+        if [[ ! "$selected_idx" =~ ^[0-9]+$ ]] || (( selected_idx < 1 || selected_idx > ${#wallet_names[@]} )); then
+            echo -e "${RED}Invalid selection.${NC}"
+            read -p "Press Enter to return..."
+            return
+        fi
+        selected_idx=$((selected_idx-1))
+        validator_name="${wallet_names[$selected_idx]}"
+        delegator_addr="${wallet_addrs[$selected_idx]}"
+        valoper_addr="${wallet_valopers[$selected_idx]}"
     fi
 
-    if [[ -z "$delegator_addr" || "$delegator_addr" == "null" ]]; then
-        echo -e "${RED}Delegator address for this validator could not be auto-detected.${NC}"
-        read -p "Press Enter to return..."
-        return
+    echo -e "Wallet name       : ${GREEN}${validator_name}${NC}"
+    echo -e "Delegator address : ${CYAN}${delegator_addr}${NC}"
+    if [[ -n "${valoper_addr:-}" ]]; then
+        echo -e "Validator operator: ${CYAN}${valoper_addr}${NC}"
     fi
-
-    echo -e "Validator operator : ${CYAN}${valoper_addr}${NC}"
-    echo -e "Delegator address  : ${CYAN}${delegator_addr}${NC}"
     echo ""
 
     rewards_json=$(latandad query distribution rewards "$delegator_addr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query distribution rewards "$delegator_addr" --node "$fallback_node" --output json 2>/dev/null || true)
