@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.3 (Rewards Claim + UX Fixes)
+# Version: 1.4 (Tx Output Parser Fix)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -59,16 +59,21 @@ function broadcast_tx() {
     echo -e "${CYAN}Broadcasting transaction: ${desc}${NC}"
 
     # Execute command using argument array (no eval) and capture JSON output.
-    local output
+    local output json_output
     output=$("$@" -y --output json 2>&1 || true)
+    json_output="$output"
 
-    if echo "$output" | jq -e . &>/dev/null; then
+    if ! echo "$json_output" | jq -e . &>/dev/null; then
+        json_output=$(echo "$output" | awk 'found || $0 ~ /^[[:space:]]*\{/ { found=1; print }')
+    fi
+
+    if echo "$json_output" | jq -e . &>/dev/null; then
         local code
         local txhash
         local raw_log
-        code=$(echo "$output" | jq -r '(.code // 0) | tostring')
-        txhash=$(echo "$output" | jq -r '.txhash // empty')
-        raw_log=$(echo "$output" | jq -r '.raw_log // empty')
+        code=$(echo "$json_output" | jq -r '(.code // 0) | tostring')
+        txhash=$(echo "$json_output" | jq -r '.txhash // empty')
+        raw_log=$(echo "$json_output" | jq -r '.raw_log // empty')
 
         if [[ "$code" == "0" ]]; then
             echo -e "\n  ${GREEN}[OK] Transaction successful.${NC}"
