@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.4 (Tx Output Parser Fix)
+# Version: 1.5 (LTD Balance Display)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -280,6 +280,11 @@ function validate_deposit() {
     [[ "$value" =~ ^[0-9]+ultd$ ]]
 }
 
+function ultd_to_ltd() {
+    local amount="${1:-0}"
+    awk -v amount="$amount" 'BEGIN { printf "%.6f", amount / 1000000 }' 2>/dev/null || echo "0.000000"
+}
+
 # ============================================
 # Option 1: Install Node
 # ============================================
@@ -514,9 +519,11 @@ function manage_wallet() {
                     continue
                 fi
                 RAW_BAL=$(latandad query bank balances "$waddr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query bank balances "$waddr" --node https://t-latanda.rpc.utsa.tech:443 --output json 2>/dev/null)
-                balance=$(echo "$RAW_BAL" | jq -r '.balances[0].amount' 2>/dev/null)
+                balance=$(echo "$RAW_BAL" | jq -r '.balances[]? | select(.denom=="ultd") | .amount' 2>/dev/null | head -n 1)
                 if [[ -z "$balance" || "$balance" == "null" || "$balance" == "" ]]; then balance="0"; fi
-                echo -e "Balance: ${GREEN}${balance} ultd${NC}"
+                ltd_balance=$(ultd_to_ltd "$balance")
+                echo -e "Balance: ${GREEN}${ltd_balance} LTD${NC}"
+                echo -e "Raw    : ${CYAN}${balance} ultd${NC}"
                 read -p "Press Enter to continue..."
                 ;;
             0) break ;;
@@ -727,10 +734,10 @@ function print_rewards_summary() {
         ')
     fi
 
-    ltd_amount=$(awk -v amount="$total_ultd" 'BEGIN { printf "%.6f", amount / 1000000 }' 2>/dev/null || echo "0")
+    ltd_amount=$(ultd_to_ltd "$total_ultd")
     echo -e "${CYAN}Reward Summary:${NC}"
-    echo -e "Unclaimed rewards : ${GREEN}${total_ultd} ultd${NC}"
-    echo -e "Approx in LTD     : ${GREEN}${ltd_amount} LTD${NC}"
+    echo -e "Unclaimed rewards : ${GREEN}${ltd_amount} LTD${NC}"
+    echo -e "Raw amount        : ${CYAN}${total_ultd} ultd${NC}"
     if [[ "$total_ultd" == "0" || "$total_ultd" == "0.0" || "$total_ultd" == "0.000000" ]]; then
         echo -e "${YELLOW}No claimable rewards yet.${NC}"
     fi
