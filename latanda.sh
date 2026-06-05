@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.2 (Updater + UX Fixes)
+# Version: 1.3 (Rewards Claim + UX Fixes)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -618,20 +618,19 @@ function create_validator() {
 }
 
 # ============================================
-# Option 5: Check Validator Rewards
+# Option 5: Validator Rewards
 # ============================================
-function check_validator_rewards() {
-    check_binary || return
-    print_logo
-    echo -e "${YELLOW}--- Check Validator Rewards ---${NC}"
-    echo ""
-
-    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
-    local rewards_json total_ultd wallet_json validator_name delegator_addr valoper_addr selected_idx
+function select_validator_wallet() {
+    local fallback_node="$1"
+    local wallet_json selected_idx
     local key_name key_addr key_valoper validator_json
     local -a wallet_names=()
     local -a wallet_addrs=()
     local -a wallet_valopers=()
+
+    REWARD_WALLET_NAME=""
+    REWARD_DELEGATOR_ADDR=""
+    REWARD_VALOPER_ADDR=""
 
     wallet_json=$(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null || echo '[]')
     if ! echo "$wallet_json" | jq -e 'type=="array" and length>0' >/dev/null 2>&1; then
@@ -653,17 +652,17 @@ function check_validator_rewards() {
         [[ -z "$key_valoper" ]] && continue
         validator_json=$(latandad query staking validator "$key_valoper" --home "$HOME_DIR" --output json 2>/dev/null || latandad query staking validator "$key_valoper" --node "$fallback_node" --output json 2>/dev/null || true)
         if echo "$validator_json" | jq -e --arg v "$key_valoper" '.validator.operator_address? == $v' >/dev/null 2>&1; then
-            validator_name="${wallet_names[$i]}"
-            delegator_addr="${wallet_addrs[$i]}"
-            valoper_addr="$key_valoper"
+            REWARD_WALLET_NAME="${wallet_names[$i]}"
+            REWARD_DELEGATOR_ADDR="${wallet_addrs[$i]}"
+            REWARD_VALOPER_ADDR="$key_valoper"
             break
         fi
     done
 
-    if [[ -z "${delegator_addr:-}" ]]; then
+    if [[ -z "$REWARD_DELEGATOR_ADDR" ]]; then
         echo -e "${YELLOW}Validator wallet could not be auto-detected.${NC}"
         echo -e "${YELLOW}Select wallet manually:${NC}"
-        j=1
+        local j=1
         for i in "${!wallet_names[@]}"; do
             echo "  $j) ${wallet_names[$i]} - ${wallet_addrs[$i]}"
             j=$((j+1))
@@ -675,23 +674,40 @@ function check_validator_rewards() {
             return
         fi
         selected_idx=$((selected_idx-1))
-        validator_name="${wallet_names[$selected_idx]}"
-        delegator_addr="${wallet_addrs[$selected_idx]}"
-        valoper_addr="${wallet_valopers[$selected_idx]}"
+        REWARD_WALLET_NAME="${wallet_names[$selected_idx]}"
+        REWARD_DELEGATOR_ADDR="${wallet_addrs[$selected_idx]}"
+        REWARD_VALOPER_ADDR="${wallet_valopers[$selected_idx]}"
     fi
 
-    echo -e "Wallet name       : ${GREEN}${validator_name}${NC}"
-    echo -e "Delegator address : ${CYAN}${delegator_addr}${NC}"
-    if [[ -n "${valoper_addr:-}" ]]; then
-        echo -e "Validator operator: ${CYAN}${valoper_addr}${NC}"
-    fi
+    echo -e "Wallet name       : ${GREEN}${REWARD_WALLET_NAME}${NC}"
+    echo -e "Delegator address : ${CYAN}${REWARD_DELEGATOR_ADDR}${NC}"
+    [[ -n "$REWARD_VALOPER_ADDR" ]] && echo -e "Validator operator: ${CYAN}${REWARD_VALOPER_ADDR}${NC}"
     echo ""
+    return 0
+}
 
-    rewards_json=$(latandad query distribution rewards "$delegator_addr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query distribution rewards "$delegator_addr" --node "$fallback_node" --output json 2>/dev/null || true)
+function print_rewards_summary() {
+    local rewards_json="$1"
+    local total_ultd ltd_amount
 
-    if echo "$rewards_json" | jq -e . &>/dev/null; then
+    total_ultd=$(echo "$rewards_json" | jq -r '
+        .total[]?
+        | if type == "object" and (.denom // "") == "ultd" then (.amount // "")
+          elif type == "string" then .
+          else empty end
+    ' 2>/dev/null | awk '
+        BEGIN { sum = 0 }
+        {
+            gsub(/[[:space:]]/, "", $0)
+            if ($0 ~ /^[0-9]+(\.[0-9]+)?ultd$/) { sub(/ultd$/, "", $0); sum += $0 }
+            else if ($0 ~ /^[0-9]+(\.[0-9]+)?$/) { sum += $0 }
+        }
+        END { printf "%.6f", sum }
+    ')
+
+    if [[ -z "$total_ultd" || "$total_ultd" == "0.000000" ]]; then
         total_ultd=$(echo "$rewards_json" | jq -r '
-            .total[]?
+            .rewards[]?.reward[]?
             | if type == "object" and (.denom // "") == "ultd" then (.amount // "")
               elif type == "string" then .
               else empty end
@@ -704,31 +720,31 @@ function check_validator_rewards() {
             }
             END { printf "%.6f", sum }
         ')
+    fi
 
-        if [[ -z "$total_ultd" || "$total_ultd" == "0.000000" ]]; then
-            total_ultd=$(echo "$rewards_json" | jq -r '
-                .rewards[]?.reward[]?
-                | if type == "object" and (.denom // "") == "ultd" then (.amount // "")
-                  elif type == "string" then .
-                  else empty end
-            ' 2>/dev/null | awk '
-                BEGIN { sum = 0 }
-                {
-                    gsub(/[[:space:]]/, "", $0)
-                    if ($0 ~ /^[0-9]+(\.[0-9]+)?ultd$/) { sub(/ultd$/, "", $0); sum += $0 }
-                    else if ($0 ~ /^[0-9]+(\.[0-9]+)?$/) { sum += $0 }
-                }
-                END { printf "%.6f", sum }
-            ')
-        fi
+    ltd_amount=$(awk -v amount="$total_ultd" 'BEGIN { printf "%.6f", amount / 1000000 }' 2>/dev/null || echo "0")
+    echo -e "${CYAN}Reward Summary:${NC}"
+    echo -e "Unclaimed rewards : ${GREEN}${total_ultd} ultd${NC}"
+    echo -e "Approx in LTD     : ${GREEN}${ltd_amount} LTD${NC}"
+    if [[ "$total_ultd" == "0" || "$total_ultd" == "0.0" || "$total_ultd" == "0.000000" ]]; then
+        echo -e "${YELLOW}No claimable rewards yet.${NC}"
+    fi
+}
 
-        ltd_amount=$(awk -v amount="$total_ultd" 'BEGIN { printf "%.6f", amount / 1000000 }' 2>/dev/null || echo "0")
-        echo -e "${CYAN}Reward Summary:${NC}"
-        echo -e "Unclaimed rewards : ${GREEN}${total_ultd} ultd${NC}"
-        echo -e "Approx in LTD     : ${GREEN}${ltd_amount} LTD${NC}"
-        if [[ "$total_ultd" == "0" || "$total_ultd" == "0.0" || "$total_ultd" == "0.000000" ]]; then
-            echo -e "${YELLOW}No claimable rewards yet.${NC}"
-        fi
+function show_validator_rewards() {
+    print_logo
+    echo -e "${YELLOW}--- Check Validator Rewards ---${NC}"
+    echo ""
+
+    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+    local rewards_json
+
+    select_validator_wallet "$fallback_node" || return
+
+    rewards_json=$(latandad query distribution rewards "$REWARD_DELEGATOR_ADDR" --home "$HOME_DIR" --output json 2>/dev/null || latandad query distribution rewards "$REWARD_DELEGATOR_ADDR" --node "$fallback_node" --output json 2>/dev/null || true)
+
+    if echo "$rewards_json" | jq -e . &>/dev/null; then
+        print_rewards_summary "$rewards_json"
     else
         echo -e "${RED}Failed to query rewards.${NC}"
         echo "$rewards_json" | head -n 5
@@ -736,9 +752,86 @@ function check_validator_rewards() {
 
     echo ""
     echo -e "${YELLOW}Command used:${NC}"
-    echo "latandad query distribution rewards $delegator_addr --home ~/.latanda"
+    echo "latandad query distribution rewards $REWARD_DELEGATOR_ADDR --home ~/.latanda"
     echo ""
     read -p "Press Enter to return..."
+}
+
+function claim_validator_rewards() {
+    print_logo
+    echo -e "${YELLOW}--- Claim Validator Rewards ---${NC}"
+    echo ""
+
+    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+    local validator_json rewards_json confirm
+
+    select_validator_wallet "$fallback_node" || return
+
+    if [[ -z "$REWARD_VALOPER_ADDR" ]]; then
+        echo -e "${RED}Validator operator address could not be derived from this wallet.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    validator_json=$(latandad query staking validator "$REWARD_VALOPER_ADDR" --home "$HOME_DIR" --output json 2>/dev/null || latandad query staking validator "$REWARD_VALOPER_ADDR" --node "$fallback_node" --output json 2>/dev/null || true)
+    if ! echo "$validator_json" | jq -e --arg v "$REWARD_VALOPER_ADDR" '.validator.operator_address? == $v' >/dev/null 2>&1; then
+        echo -e "${RED}This wallet does not appear to be an active validator on-chain.${NC}"
+        echo -e "Open ${YELLOW}Option 4${NC} to create a validator first, or select the validator wallet."
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    rewards_json=$(latandad query distribution rewards "$REWARD_DELEGATOR_ADDR" --home "$HOME_DIR" --output json 2>/dev/null || latandad query distribution rewards "$REWARD_DELEGATOR_ADDR" --node "$fallback_node" --output json 2>/dev/null || true)
+    if echo "$rewards_json" | jq -e . &>/dev/null; then
+        print_rewards_summary "$rewards_json"
+        echo ""
+    fi
+
+    echo -e "${YELLOW}This will withdraw delegator rewards and validator commission, if available.${NC}"
+    echo -e "From wallet : ${GREEN}${REWARD_WALLET_NAME}${NC}"
+    echo -e "Validator   : ${CYAN}${REWARD_VALOPER_ADDR}${NC}"
+    echo ""
+    read -p "Type 'CLAIM' to broadcast the claim transaction: " confirm
+    if [[ "$confirm" != "CLAIM" ]]; then
+        echo -e "${CYAN}Claim cancelled. Nothing was broadcast.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if broadcast_tx "claim validator rewards" \
+        latandad tx distribution withdraw-rewards "$REWARD_VALOPER_ADDR" \
+        --from "$REWARD_WALLET_NAME" \
+        --commission \
+        --keyring-backend test \
+        --chain-id "$CHAIN_ID" \
+        --home "$HOME_DIR" \
+        --gas auto \
+        --gas-adjustment 1.4 \
+        --fees "$DEFAULT_FEES"; then
+        echo -e "${GREEN}Claim transaction submitted. Check your wallet balance after the tx is indexed.${NC}"
+    else
+        echo -e "${RED}Claim transaction failed. Please read the error above and try again.${NC}"
+    fi
+    read -p "Press Enter to return..."
+}
+
+function manage_validator_rewards() {
+    check_binary || return
+    while true; do
+        print_logo
+        echo -e "${YELLOW}--- Validator Rewards ---${NC}"
+        echo "1. Check Validator Rewards"
+        echo "2. Claim Validator Rewards"
+        echo "0. Back to Main Menu"
+        echo ""
+        read -p "Select action: " opt
+        case $opt in
+            1) show_validator_rewards ;;
+            2) claim_validator_rewards ;;
+            0) break ;;
+            *) echo "Invalid option."; sleep 1 ;;
+        esac
+    done
 }
 
 # ============================================
@@ -943,7 +1036,7 @@ CYN="\033[36m"; GRN="\033[32m"; YLW="\033[33m"
 RED="\033[31m"; BLU="\033[34m"; MGN="\033[35m"; WHT="\033[97m"
 
 def clr(): os.system("clear")
-def box(w): return "â”€" * w
+def box(w): return "-" * w
 
 def http_get(url, timeout=12):
     try:
@@ -961,9 +1054,9 @@ def get_local_status():
         d   = json.loads(raw)
         si  = d.get("sync_info") or d.get("SyncInfo") or {}
         vi  = d.get("validator_info") or d.get("ValidatorInfo") or {}
-        return {"ok": True, "local": int(si.get("latest_block_height", 0)), "block_time": si.get("latest_block_time", ""), "catching_up": bool(si.get("catching_up", True)), "voting_power": vi.get("voting_power", "â€”")}
+        return {"ok": True, "local": int(si.get("latest_block_height", 0)), "block_time": si.get("latest_block_time", ""), "catching_up": bool(si.get("catching_up", True)), "voting_power": vi.get("voting_power", "-")}
     except Exception as e:
-        return {"ok": False, "error": str(e), "local": 0, "catching_up": True, "voting_power": "â€”"}
+        return {"ok": False, "error": str(e), "local": 0, "catching_up": True, "voting_power": "-"}
 
 def get_network_height():
     for rpc in [GENESIS_RPC, LOCAL_RPC]:
@@ -1074,22 +1167,22 @@ def calc_scores(signed, missed, local, net_h):
     sync_score = 100.0 if not net_h or net_h <= 0 else (100.0 if (net_h - local) <= 50 else max(0.0, 100.0 - (((net_h - local) - 50) * 0.15)))
     return uptime_score, sync_score, (uptime_score * 0.6) + (sync_score * 0.4)
 
-def fmt_n(n): return f"{int(n):,}".replace(",", ".") if n is not None else "â€”"
+def fmt_n(n): return f"{int(n):,}".replace(",", ".") if n is not None else "-"
 def fmt_ltd(utld): return f"{utld/1000000:,.2f} LTD".replace(",", ".")
 def fmt_dur(sec):
-    if sec is None or sec < 0: return "â€”"
+    if sec is None or sec < 0: return "-"
     sec = int(sec)
     if sec < 60: return f"{sec}s"
     if sec < 3600: return f"{sec//60}m {sec%60}s"
     h = sec // 3600; m = (sec % 3600) // 60
     return f"{h//24}d {h%24}j {m}m" if h >= 24 else f"{h}j {m}m"
-def fmt_blktime(iso): return iso[:19].replace("T", " ") if iso else "â€”"
+def fmt_blktime(iso): return iso[:19].replace("T", " ") if iso else "-"
 def pbar(pct, width=44, col=None):
     pct = max(0.0, min(100.0, pct)); filled = int(width * pct / 100)
-    return (col or (GRN if pct >= 99.9 else YLW if pct >= 85 else CYN)) + "â–ˆ" * filled + DIM + "â–‘" * (width - filled) + R
+    return (col or (GRN if pct >= 99.9 else YLW if pct >= 85 else CYN)) + "#" * filled + DIM + "." * (width - filled) + R
 def score_col(s): return GRN if s >= 95 else YLW if s >= 80 else RED
 
-history = deque(maxlen=HISTORY_LEN); logs = deque(maxlen=60); start_ts = time.time(); net_src = "â€”"
+history = deque(maxlen=HISTORY_LEN); logs = deque(maxlen=60); start_ts = time.time(); net_src = "-"
 def add_log(msg, lvl="INFO"):
     logs.appendleft(f"{DIM}{datetime.now().strftime('%H:%M:%S')}{R} {({'OK': GRN, 'WARN': YLW, 'ERR': RED, 'INFO': BLU}.get(lvl, DIM))}[{lvl:4}]{R} {msg}")
 
@@ -1105,25 +1198,25 @@ def render(local_st, net_h, peers):
             dt = win[-1][0] - win[0][0]; db = win[-1][1] - win[0][1]
             if dt > 0.5 and db > 0: bps = db / dt; eta_sec = remaining / bps if remaining else None
     
-    node_status = f"{RED}{BLD}â— ERROR{R}" if has_err else f"{GRN}{BLD}â— SYNCED{R}" if not catching else f"{YLW}{BLD}â— SYNCING{R}"
+    node_status = f"{RED}{BLD}[ERROR]{R}" if has_err else f"{GRN}{BLD}[SYNCED]{R}" if not catching else f"{YLW}{BLD}[SYNCING]{R}"
     with _sc["lock"]: signed, missed, val_start, b_done, b_pct = _sc["signed"], _sc["missed"], _sc["val_start"], _sc["backfill_done"], _sc["backfill_pct"]
     score = calc_scores(signed, missed, local, net_h)
     
     clr()
     pad = max(0, (W - 54) // 2)
-    print(f"\n{BLD}{CYN}{' '*pad}  â¬¡ VALIDATOR â€” LA TANDA CHAIN MONITOR  {R}\n{DIM}{box(W)}{R}")
-    print(f"  {node_status}   {DIM}monitor uptime:{R} {WHT}{fmt_dur(time.time()-start_ts)}{R}   {DIM}peers:{R} {WHT}{peers or 'â€”'}{R}\n{DIM}{box(W)}{R}\n")
-    print(f"  {BLD}{BLU}â–¸ VALIDATOR SCORE{R}\n  {DIM}{'â”€'*52}{R}")
+    print(f"\n{BLD}{CYN}{' '*pad}  VALIDATOR - LA TANDA CHAIN MONITOR  {R}\n{DIM}{box(W)}{R}")
+    print(f"  {node_status}   {DIM}monitor uptime:{R} {WHT}{fmt_dur(time.time()-start_ts)}{R}   {DIM}peers:{R} {WHT}{peers or '-'}{R}\n{DIM}{box(W)}{R}\n")
+    print(f"  {BLD}{BLU}> VALIDATOR SCORE{R}\n  {DIM}{'-'*52}{R}")
     print(f"  {DIM}Final Score:<24{R}{score_col(score[2])}{BLD}{score[2]:.2f}/100{R}")
     print(f"  {pbar(score[2], W-6, score_col(score[2]))}\n")
     
-    print(f"  {BLD}{BLU}â–¸ NODE SYNC{R}\n  {DIM}{'â”€'*52}{R}")
+    print(f"  {BLD}{BLU}> NODE SYNC{R}\n  {DIM}{'-'*52}{R}")
     print(f"  {DIM}Block Lokal:<24{R}{CYN}{BLD}{fmt_n(local)}{R}   {DIM}Sisa: {fmt_n(remaining)}{R}")
     print(f"  {pbar(pct_sync, W-14)}  {BLD}{pct_sync:.2f}%{R}\n")
     
-    print(f"  {DIM}{'â”€'*4} Log {'â”€'*(W-12)}{R}")
+    print(f"  {DIM}{'-'*4} Log {'-'*(W-12)}{R}")
     for line in list(logs)[:LOG_LINES]: print(f"  {line}")
-    print(f"\n{DIM}{box(W)}{R}\n  {DIM}Ctrl+C keluar  â”‚  screen -r latmon re-attach{R}\n")
+    print(f"\n{DIM}{box(W)}{R}\n  {DIM}Ctrl+C keluar | screen -r latmon re-attach{R}\n")
 
 def main():
     global net_src
@@ -1139,7 +1232,7 @@ def main():
                     history.append((time.time(), cur)); prev_local = cur
             if tick % 3 == 0 or net_h is None:
                 nh, src = get_network_height()
-                if nh: net_h, net_src, prev_net = nh, src or "â€”", nh
+                if nh: net_h, net_src, prev_net = nh, src or "-", nh
             if tick % 4 == 0 or peers is None: peers = get_peers()
             render(local_st, net_h, peers)
             time.sleep(REFRESH_SEC)
@@ -1162,20 +1255,20 @@ case "\$1" in
   stop) screen -XS \$SCREEN_NAME quit 2>/dev/null && echo "Monitor dihentikan." || echo "Tidak ada session aktif." ;;
   attach|log) screen -r \$SCREEN_NAME ;;
   status) screen -list | grep \$SCREEN_NAME || echo "Monitor tidak berjalan." ;;
-  restart) screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH; echo -e "\033[32m[âœ“] Monitor di-restart.\033[0m" ;;
+  restart) screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH; echo -e "\033[32m[OK] Monitor di-restart.\033[0m" ;;
   *)
     if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
       echo -e "\033[33m[!] Monitor sudah berjalan.\033[0m"
       echo -e "    Attach  : screen -r \$SCREEN_NAME"
       echo -e "    Stop    : latmon stop"
     else
-      echo -e "\033[32m[âœ“] Memulai monitor...\033[0m"
+      echo -e "\033[32m[OK] Memulai monitor...\033[0m"
       screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH
       sleep 0.8
       if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
-        echo -e "\033[32m[âœ“] Berjalan! Attach dengan:\033[0m  screen -r \$SCREEN_NAME"
+        echo -e "\033[32m[OK] Berjalan! Attach dengan:\033[0m  screen -r \$SCREEN_NAME"
       else
-        echo -e "\033[31m[âœ—] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
+        echo -e "\033[31m[FAIL] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
       fi
     fi
     ;;
@@ -1195,12 +1288,12 @@ LAUNCHEREOF
 function uninstall_node() {
     print_logo
     echo -e "${RED}======================================================${NC}"
-    echo -e "${RED}       âš ï¸  DANGER: CLEAN UNINSTALLATION âš ï¸           ${NC}"
+    echo -e "${RED}       DANGER: CLEAN UNINSTALLATION           ${NC}"
     echo -e "${RED}======================================================${NC}"
     echo -e "This will completely remove the La Tanda Node, PM2 routines,"
     echo -e "Blockchain Data, and ${RED}ALL YOUR SAVED WALLETS${NC} from this machine."
     echo ""
-    echo -e "${YELLOW}ðŸš¨ CRITICAL REMINDER: ðŸš¨${NC}"
+    echo -e "${YELLOW}CRITICAL REMINDER:${NC}"
     echo -e "Please ensure you have securely backed up your 24-word Mnemonic"
     echo -e "Phrases for all your wallets. Once wiped, they are gone FOREVER."
     echo ""
@@ -1231,7 +1324,7 @@ function uninstall_node() {
     sudo rm -f /usr/local/bin/latmon
     rm -rf "$HOME/.latandad-monitor"
 
-    echo -e "${GREEN}âœ… Uninstallation Complete!${NC}"
+    echo -e "${GREEN}Uninstallation Complete!${NC}"
     echo -e "The La Tanda CLI and all node data have been cleanly wiped."
     exit 0
 }
@@ -1243,7 +1336,7 @@ function show_interactive_menu() {
         echo "2) Check Node Status & Sync Progress"
         echo "3) Wallet Management"
         echo "4) Create Validator (Stake on Network)"
-        echo "5) Check Validator Rewards"
+        echo "5) Validator Rewards (Check / Claim)"
         echo "6) Governance Actions (Vote / Propose)"
         echo "7) View Live Logs"
         echo "8) Install & Run Advanced Monitor"
@@ -1257,7 +1350,7 @@ function show_interactive_menu() {
             2) check_status ;;
             3) manage_wallet ;;
             4) create_validator ;;
-            5) check_validator_rewards ;;
+            5) manage_validator_rewards ;;
             6) manage_gov ;;
             7) show_logs ;;
             8) install_advanced_monitor ;;
@@ -1275,14 +1368,14 @@ case "${1:-}" in
     status) check_status ;;
     wallet) manage_wallet ;;
     validator) create_validator ;;
-    rewards) check_validator_rewards ;;
+    rewards) manage_validator_rewards ;;
     gov) manage_gov ;;
     logs) show_logs ;;
     monitor) 
         if command -v latmon &> /dev/null; then
             latmon attach || latmon
         else
-            echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 7 to install it.${NC}"
+            echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 8 to install it.${NC}"
         fi
         ;;
     update) self_update "${2:-}" ;;
@@ -1297,7 +1390,7 @@ case "${1:-}" in
         echo "    status      - Check node status and sync progress"
         echo "    wallet      - Manage wallets"
         echo "    validator   - Create or check validator"
-        echo "    rewards     - Check validator rewards (auto-detect validator address)"
+        echo "    rewards     - Check or claim validator rewards"
         echo "    gov         - Manage governance proposals"
         echo "    logs        - View live pm2 logs"
         echo "    monitor     - Attach to advanced python monitor"

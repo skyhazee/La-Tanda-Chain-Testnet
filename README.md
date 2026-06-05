@@ -22,7 +22,7 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - `latman status` : Check node sync progress and validation status.
 - `latman wallet` : Jump straight into wallet creation & balance checker.
 - `latman validator` : Create a validator instantly.
-- `latman rewards` : Check validator rewards with auto-detected validator wallet/address.
+- `latman rewards` : Check or claim validator rewards with auto-detected validator wallet/address.
 - `latman gov`   : View beautifully formatted active proposals and cast your vote.
 - `latman logs`   : Stream real-time node outputs via PM2.
 - `latman monitor`: Attach to the advanced Python monitor UI.
@@ -53,12 +53,18 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 ### 4. Check Validator Rewards
 After your validator is active, you can check rewards directly from the manager:
 
-- Use **Option 5 (Check Validator Rewards)** from the main menu, or run `latman rewards`.
+- Use **Option 5 (Validator Rewards)** from the main menu, or run `latman rewards`.
 - The script auto-detects the registered validator wallet/address from your local keyring.
 - Reward query command used:
 
 ```bash
 latandad query distribution rewards <auto-detected-ltd-address> --home ~/.latanda
+```
+
+To claim rewards, choose **Option 5 -> Claim Validator Rewards**. The manager broadcasts:
+
+```bash
+latandad tx distribution withdraw-rewards <auto-detected-valoper-address> --from <wallet-name> --commission --home ~/.latanda
 ```
 
 ### 5. Advanced Monitor Setup
