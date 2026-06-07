@@ -21,6 +21,7 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 
 - `latman status` : Check node sync progress and validation status.
 - `latman wallet` : Jump straight into wallet creation & balance checker.
+- `latman send`   : Send LTD from a saved wallet.
 - `latman validator` : Create a validator instantly.
 - `latman rewards` : Check, claim, or restake validator rewards with auto-detected validator wallet/address.
 - `latman gov`   : View beautifully formatted active proposals and cast your vote.
@@ -42,6 +43,7 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - To check balance, use **Option 4 (Check Wallet Balance)** and choose either:
   - manual address input, or
   - select from saved wallets.
+- To transfer tokens, choose **Option 5 (Send LTD)**, select a saved sender wallet, enter the recipient address and LTD amount, then confirm the transaction.
 - Join the official La Tanda Discord server and post your address in the appropriate channel to request testnet funds (LTD tokens) needed to become a validator.
 
 ### 3. Join as a Validator

@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.6 (Validator Reward Restaking)
+# Version: 1.7 (Send LTD)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -265,6 +265,11 @@ function validate_wallet_name() {
     [[ "$value" =~ ^[a-zA-Z0-9_-]{1,64}$ ]]
 }
 
+function validate_wallet_address() {
+    local value="$1"
+    [[ "$value" =~ ^ltd1[a-z0-9]{38,58}$ ]]
+}
+
 function validate_proposal_id() {
     local value="$1"
     [[ "$value" =~ ^[0-9]{1,8}$ ]]
@@ -435,6 +440,127 @@ function check_status() {
 # ============================================
 # Option 3: Wallet Management
 # ============================================
+function send_ltd() {
+    print_logo
+    echo -e "${YELLOW}--- Send LTD ---${NC}"
+    echo ""
+
+    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+    local wallet_json pick sender_name sender_addr recipient_addr
+    local balance_json balance_ultd balance_ltd fee_ultd available_ultd
+    local amount_ltd amount_ultd confirm
+
+    wallet_json=$(latandad keys list --keyring-backend test --home "$HOME_DIR" --output json 2>/dev/null || echo '[]')
+    if ! echo "$wallet_json" | jq -e 'type=="array" and length>0' >/dev/null 2>&1; then
+        echo -e "${RED}No saved wallets found.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    echo -e "${CYAN}Select sender wallet:${NC}"
+    local i=1
+    while IFS=$'\t' read -r n a; do
+        echo "  $i) $n - $a"
+        i=$((i+1))
+    done < <(echo "$wallet_json" | jq -r '.[] | [.name, .address] | @tsv' 2>/dev/null)
+
+    read -p "Select wallet number: " pick
+    if [[ ! "$pick" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Invalid selection.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    sender_name=$(echo "$wallet_json" | jq -r --argjson idx "$((pick-1))" '.[$idx].name // empty' 2>/dev/null || true)
+    sender_addr=$(echo "$wallet_json" | jq -r --argjson idx "$((pick-1))" '.[$idx].address // empty' 2>/dev/null || true)
+    if [[ -z "$sender_name" || -z "$sender_addr" ]]; then
+        echo -e "${RED}Invalid selection.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    balance_json=$(latandad query bank balances "$sender_addr" --home "$HOME_DIR" --output json 2>/dev/null || latandad query bank balances "$sender_addr" --node "$fallback_node" --output json 2>/dev/null || true)
+    balance_ultd=$(echo "$balance_json" | jq -r '.balances[]? | select(.denom=="ultd") | .amount' 2>/dev/null | head -n 1)
+    [[ -z "$balance_ultd" || "$balance_ultd" == "null" ]] && balance_ultd="0"
+    if [[ ! "$balance_ultd" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Failed to read the sender wallet balance.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    fee_ultd="${DEFAULT_FEES%ultd}"
+    if [[ ! "$fee_ultd" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Configured transaction fee is invalid: ${DEFAULT_FEES}${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    available_ultd=$((balance_ultd - fee_ultd))
+    (( available_ultd < 0 )) && available_ultd=0
+    balance_ltd=$(ultd_to_ltd "$balance_ultd")
+
+    echo ""
+    echo -e "Sender wallet    : ${GREEN}${sender_name}${NC} (${CYAN}${sender_addr}${NC})"
+    echo -e "Wallet balance   : ${GREEN}${balance_ltd} LTD${NC}"
+    echo -e "Reserved tx fee  : ${YELLOW}${DEFAULT_FEES}${NC}"
+    echo -e "Maximum send     : ${GREEN}$(ultd_to_ltd "$available_ultd") LTD${NC}"
+    echo ""
+
+    read -p "Enter recipient address (starts with ltd1...): " recipient_addr
+    if ! validate_wallet_address "$recipient_addr"; then
+        echo -e "${RED}Invalid recipient wallet address format.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+    if [[ "$recipient_addr" == "$sender_addr" ]]; then
+        echo -e "${RED}Recipient address cannot be the same as the sender address.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    read -p "Enter amount to send in LTD (example: 100 or 12.5): " amount_ltd
+    if ! amount_ultd=$(ltd_to_ultd "$amount_ltd") || [[ ! "$amount_ultd" =~ ^[0-9]+$ ]] || (( amount_ultd <= 0 )); then
+        echo -e "${RED}Invalid amount. Use a positive LTD amount with up to 6 decimal places.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if (( amount_ultd > available_ultd )); then
+        echo -e "${RED}Insufficient balance after reserving ${DEFAULT_FEES} for the transaction fee.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Review transaction carefully:${NC}"
+    echo -e "From   : ${GREEN}${sender_name}${NC} (${CYAN}${sender_addr}${NC})"
+    echo -e "To     : ${CYAN}${recipient_addr}${NC}"
+    echo -e "Amount : ${GREEN}${amount_ltd} LTD${NC} (${CYAN}${amount_ultd} ultd${NC})"
+    echo -e "Fee    : ${YELLOW}${DEFAULT_FEES}${NC}"
+    echo ""
+    read -p "Type 'SEND' to broadcast the transaction: " confirm
+    if [[ "$confirm" != "SEND" ]]; then
+        echo -e "${CYAN}Send cancelled. Nothing was broadcast.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if broadcast_tx "send ${amount_ltd} LTD to ${recipient_addr}" \
+        latandad tx bank send "$sender_name" "$recipient_addr" "${amount_ultd}ultd" \
+        --from "$sender_name" \
+        --keyring-backend test \
+        --chain-id "$CHAIN_ID" \
+        --home "$HOME_DIR" \
+        --gas auto \
+        --gas-adjustment 1.4 \
+        --fees "$DEFAULT_FEES"; then
+        echo -e "${GREEN}Send transaction submitted.${NC}"
+    else
+        echo -e "${RED}Send transaction failed. Please read the error above and try again.${NC}"
+    fi
+    read -p "Press Enter to return..."
+}
+
 function manage_wallet() {
     check_binary || return
     while true; do
@@ -444,6 +570,7 @@ function manage_wallet() {
         echo "2. Recover Wallet (from mnemonic seed)"
         echo "3. List Saved Wallets"
         echo "4. Check Wallet Balance"
+        echo "5. Send LTD"
         echo "0. Back to Main Menu"
         echo ""
         read -p "Select action: " opt
@@ -523,7 +650,7 @@ function manage_wallet() {
                         ;;
                 esac
 
-                if [[ ! "$waddr" =~ ^ltd1[a-z0-9]{38,58}$ ]]; then
+                if ! validate_wallet_address "$waddr"; then
                     echo -e "${RED}Invalid wallet address format.${NC}"
                     read -p "Press Enter to continue..."
                     continue
@@ -536,6 +663,7 @@ function manage_wallet() {
                 echo -e "Raw    : ${CYAN}${balance} ultd${NC}"
                 read -p "Press Enter to continue..."
                 ;;
+            5) send_ltd ;;
             0) break ;;
             *) echo "Invalid option." ;;
         esac
@@ -1481,6 +1609,7 @@ function show_interactive_menu() {
 case "${1:-}" in
     status) check_status ;;
     wallet) manage_wallet ;;
+    send) check_binary && send_ltd ;;
     validator) create_validator ;;
     rewards) manage_validator_rewards ;;
     gov) manage_gov ;;
