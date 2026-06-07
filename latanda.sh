@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.5 (LTD Balance Display)
+# Version: 1.6 (Validator Reward Restaking)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -283,6 +283,16 @@ function validate_deposit() {
 function ultd_to_ltd() {
     local amount="${1:-0}"
     awk -v amount="$amount" 'BEGIN { printf "%.6f", amount / 1000000 }' 2>/dev/null || echo "0.000000"
+}
+
+function ltd_to_ultd() {
+    local amount="${1:-0}"
+    awk -v amount="$amount" '
+        BEGIN {
+            if (amount !~ /^[0-9]+([.][0-9]{1,6})?$/) exit 1
+            printf "%.0f", amount * 1000000
+        }
+    '
 }
 
 # ============================================
@@ -827,6 +837,96 @@ function claim_validator_rewards() {
     read -p "Press Enter to return..."
 }
 
+function restake_validator_rewards() {
+    print_logo
+    echo -e "${YELLOW}--- Restake Claimed Rewards ---${NC}"
+    echo ""
+
+    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+    local validator_json balance_json balance_ultd balance_ltd
+    local amount_ltd amount_ultd fee_ultd available_ultd confirm
+
+    select_validator_wallet "$fallback_node" || return
+
+    if [[ -z "$REWARD_VALOPER_ADDR" ]]; then
+        echo -e "${RED}Validator operator address could not be derived from this wallet.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    validator_json=$(latandad query staking validator "$REWARD_VALOPER_ADDR" --home "$HOME_DIR" --output json 2>/dev/null || latandad query staking validator "$REWARD_VALOPER_ADDR" --node "$fallback_node" --output json 2>/dev/null || true)
+    if ! echo "$validator_json" | jq -e --arg v "$REWARD_VALOPER_ADDR" '.validator.operator_address? == $v' >/dev/null 2>&1; then
+        echo -e "${RED}This wallet does not appear to be a validator on-chain.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    balance_json=$(latandad query bank balances "$REWARD_DELEGATOR_ADDR" --home "$HOME_DIR" --output json 2>/dev/null || latandad query bank balances "$REWARD_DELEGATOR_ADDR" --node "$fallback_node" --output json 2>/dev/null || true)
+    balance_ultd=$(echo "$balance_json" | jq -r '[.balances[]? | select(.denom=="ultd") | (.amount | tonumber)] | add // 0' 2>/dev/null || echo "0")
+    if [[ ! "$balance_ultd" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Failed to read the wallet LTD balance.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    fee_ultd="${DEFAULT_FEES%ultd}"
+    if [[ ! "$fee_ultd" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Configured transaction fee is invalid: ${DEFAULT_FEES}${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    available_ultd=$((balance_ultd - fee_ultd))
+    (( available_ultd < 0 )) && available_ultd=0
+    balance_ltd=$(ultd_to_ltd "$balance_ultd")
+
+    echo -e "Wallet balance    : ${GREEN}${balance_ltd} LTD${NC} (${CYAN}${balance_ultd} ultd${NC})"
+    echo -e "Reserved tx fee   : ${YELLOW}${DEFAULT_FEES}${NC}"
+    echo -e "Maximum restake   : ${GREEN}$(ultd_to_ltd "$available_ultd") LTD${NC}"
+    echo ""
+    echo -e "${YELLOW}Claim rewards first, then wait for the claim transaction to be indexed before restaking.${NC}"
+    read -p "Enter amount to restake in LTD (example: 5000 or 12.5): " amount_ltd
+
+    if ! amount_ultd=$(ltd_to_ultd "$amount_ltd") || [[ ! "$amount_ultd" =~ ^[0-9]+$ ]] || (( amount_ultd <= 0 )); then
+        echo -e "${RED}Invalid amount. Use a positive LTD amount with up to 6 decimal places.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if (( amount_ultd > available_ultd )); then
+        echo -e "${RED}Insufficient balance after reserving ${DEFAULT_FEES} for the transaction fee.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    echo ""
+    echo -e "Restake amount : ${GREEN}${amount_ltd} LTD${NC} (${CYAN}${amount_ultd} ultd${NC})"
+    echo -e "Validator      : ${CYAN}${REWARD_VALOPER_ADDR}${NC}"
+    echo -e "From wallet    : ${GREEN}${REWARD_WALLET_NAME}${NC}"
+    echo ""
+    read -p "Type 'RESTAKE' to broadcast the delegation transaction: " confirm
+    if [[ "$confirm" != "RESTAKE" ]]; then
+        echo -e "${CYAN}Restake cancelled. Nothing was broadcast.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+
+    if broadcast_tx "restake ${amount_ltd} LTD to validator" \
+        latandad tx staking delegate "$REWARD_VALOPER_ADDR" "${amount_ultd}ultd" \
+        --from "$REWARD_WALLET_NAME" \
+        --keyring-backend test \
+        --chain-id "$CHAIN_ID" \
+        --home "$HOME_DIR" \
+        --gas auto \
+        --gas-adjustment 1.4 \
+        --fees "$DEFAULT_FEES"; then
+        echo -e "${GREEN}Restake transaction submitted.${NC}"
+    else
+        echo -e "${RED}Restake transaction failed. Please read the error above and try again.${NC}"
+    fi
+    read -p "Press Enter to return..."
+}
+
 function manage_validator_rewards() {
     check_binary || return
     while true; do
@@ -834,12 +934,14 @@ function manage_validator_rewards() {
         echo -e "${YELLOW}--- Validator Rewards ---${NC}"
         echo "1. Check Validator Rewards"
         echo "2. Claim Validator Rewards"
+        echo "3. Restake Claimed Rewards"
         echo "0. Back to Main Menu"
         echo ""
         read -p "Select action: " opt
         case $opt in
             1) show_validator_rewards ;;
             2) claim_validator_rewards ;;
+            3) restake_validator_rewards ;;
             0) break ;;
             *) echo "Invalid option."; sleep 1 ;;
         esac
@@ -1348,7 +1450,7 @@ function show_interactive_menu() {
         echo "2) Check Node Status & Sync Progress"
         echo "3) Wallet Management"
         echo "4) Create Validator (Stake on Network)"
-        echo "5) Validator Rewards (Check / Claim)"
+        echo "5) Validator Rewards (Check / Claim / Restake)"
         echo "6) Governance Actions (Vote / Propose)"
         echo "7) View Live Logs"
         echo "8) Install & Run Advanced Monitor"

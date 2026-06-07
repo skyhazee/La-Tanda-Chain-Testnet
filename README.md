@@ -22,7 +22,7 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 - `latman status` : Check node sync progress and validation status.
 - `latman wallet` : Jump straight into wallet creation & balance checker.
 - `latman validator` : Create a validator instantly.
-- `latman rewards` : Check or claim validator rewards with auto-detected validator wallet/address.
+- `latman rewards` : Check, claim, or restake validator rewards with auto-detected validator wallet/address.
 - `latman gov`   : View beautifully formatted active proposals and cast your vote.
 - `latman logs`   : Stream real-time node outputs via PM2.
 - `latman monitor`: Attach to the advanced Python monitor UI.
@@ -65,6 +65,12 @@ To claim rewards, choose **Option 5 -> Claim Validator Rewards**. The manager br
 
 ```bash
 latandad tx distribution withdraw-rewards <auto-detected-valoper-address> --from <wallet-name> --commission --home ~/.latanda
+```
+
+To delegate claimed rewards back to your own validator, wait until the claim transaction is indexed, then choose **Option 5 -> Restake Claimed Rewards**. Enter the amount in LTD; the manager verifies the available wallet balance, reserves the configured transaction fee, and broadcasts:
+
+```bash
+latandad tx staking delegate <auto-detected-valoper-address> <amount-in-ultd> --from <wallet-name> --home ~/.latanda
 ```
 
 ### 5. Advanced Monitor Setup
