@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.7 (Send LTD)
+# Version: 1.8 (Fix Go Checksum)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -21,7 +21,7 @@ HOME_DIR="${HOME}/.latanda"
 DEFAULT_FEES="500ultd"
 SOURCE_TARBALL="/tmp/latanda-chain-source.tar.gz"
 GO_TARBALL="/tmp/go.tar.gz"
-GO_SHA256="cb2396bae64183cdccce6c8e145b44f26b4a8c5e5c3ddc56b79f5bab60f41f4e"
+GO_SHA256="cb2396bae64183cdccf81a9a6df0aea3bce9511fc21469fb89a0c00470088073"
 # Set this to expected SHA256 to enforce source integrity verification.
 SOURCE_SHA256="ba73d41a8f5ba146e90dc8af8fd60fdd3279fdec6f9fdbb026942c19751143dc"
 LATMAN_UPDATE_URL="https://raw.githubusercontent.com/skyhazee/La-Tanda-Chain-Testnet/main/latanda.sh"
