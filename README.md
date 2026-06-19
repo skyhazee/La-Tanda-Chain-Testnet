@@ -19,7 +19,7 @@ sudo wget -q https://raw.githubusercontent.com/skyhazee/La-Tanda-Chain-Testnet/m
 
 This dashboard can be launched fully interactively by just typing `latman`, but it also supports direct quick-actions via subcommands from anywhere in your server:
 
-- `latman status` : Check node sync progress, local/network height, remaining blocks, ETA, and validation status.
+- `latman status` : Open a lightweight live sync dashboard with local/network height, remaining blocks, ETA, and validation status.
 - `latman wallet` : Jump straight into wallet creation & balance checker.
 - `latman send`   : Send LTD from a saved wallet.
 - `latman validator` : Create a validator instantly.
@@ -34,7 +34,7 @@ This dashboard can be launched fully interactively by just typing `latman`, but 
 ### 1. Install and Sync Your Node
 - Launch the interactive manager using `latman`.
 - Select **Option 1 (Install Node & Run)**. The script will automatically download the required dependencies, Go, the `latandad` binary, and set up the genesis file. It will start the node in the background using PM2.
-- Wait for the node to fully catch up to the network. Check the progress by selecting **Option 2 (Check Node Status)**; it shows local block, network block, remaining blocks, sync percentage, and ETA. **Do not proceed** to validator creation until the "Catching Up" status shows as "False".
+- Wait for the node to fully catch up to the network. Check the progress by selecting **Option 2 (Check Node Status)**; it refreshes every 3 seconds and shows local block, network block, remaining blocks, sync percentage, and ETA. **Do not proceed** to validator creation until the "Catching Up" status shows as "False".
 
 ### 2. Set Up a Wallet
 - Once your node is synced, open the manager and select **Option 3 (Wallet Management)**, then choose **Option 1 (Create New Wallet)**.

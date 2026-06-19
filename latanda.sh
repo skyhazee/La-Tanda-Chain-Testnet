@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.9 (Detailed Sync Status)
+# Version: 2.0 (Live Sync Dashboard)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -451,67 +451,92 @@ function install_node() {
 # ============================================
 function check_status() {
     check_binary || return
-    print_logo
-    echo -e "${CYAN}--- Node Sync Status ---${NC}"
     if ! command -v pm2 &> /dev/null || ! pm2 list | grep -q "latanda-chain"; then
+        print_logo
+        echo -e "${CYAN}--- Node Sync Status ---${NC}"
         echo -e "${RED}Node is not running via PM2. Did you install it properly?${NC}"
-    else
-        local status_json status_json_2 net_json
-        local catch_up local_block local_block_2 network_block blocks_left progress_pct
-        local sample_seconds block_diff block_rate eta_seconds eta_text
-        local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+        echo ""
+        read -p "Press Enter to return..."
+        return
+    fi
 
+    local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+    local refresh_sec=3
+    local prev_block="" prev_ts="" last_error=""
+    local status_json net_json catch_up local_block network_block blocks_left progress_pct
+    local now_ts block_diff time_diff block_rate eta_seconds eta_text
+    local stop_dashboard=0
+
+    trap 'stop_dashboard=1' INT
+    while (( stop_dashboard == 0 )); do
         status_json=$(timeout 20 latandad status --home "$HOME_DIR" 2>/dev/null || true)
+        net_json=$(curl -fsS --max-time 10 "$fallback_node/status" 2>/dev/null || true)
+
         if ! echo "$status_json" | jq -e . >/dev/null 2>&1; then
-            echo -e "${RED}Failed to read local node status within 20 seconds.${NC}"
-            echo -e "${YELLOW}Try: pm2 logs latanda-chain --lines 80${NC}"
-            echo ""
-            read -p "Press Enter to return..."
-            return
+            last_error="Failed to read local node status within 20 seconds."
+            local_block="${prev_block:-0}"
+            catch_up="true"
+        else
+            last_error=""
+            catch_up=$(echo "$status_json" | jq -r '.sync_info.catching_up // true')
+            local_block=$(echo "$status_json" | jq -r '.sync_info.latest_block_height // 0')
         fi
 
-        catch_up=$(echo "$status_json" | jq -r '.sync_info.catching_up // true')
-        local_block=$(echo "$status_json" | jq -r '.sync_info.latest_block_height // 0')
-        net_json=$(curl -fsS --max-time 10 "$fallback_node/status" 2>/dev/null || true)
         network_block=$(echo "$net_json" | jq -r '.result.sync_info.latest_block_height // empty' 2>/dev/null || true)
         if [[ -z "$network_block" || ! "$network_block" =~ ^[0-9]+$ ]]; then
             network_block="$local_block"
+            [[ -z "$last_error" ]] && last_error="Failed to read public RPC network height."
         fi
 
         blocks_left=$((network_block - local_block))
         (( blocks_left < 0 )) && blocks_left=0
         progress_pct=$(awk -v l="$local_block" -v n="$network_block" 'BEGIN { if (n > 0) printf "%.2f", (l / n) * 100; else printf "0.00" }')
 
+        now_ts=$(date +%s)
+        block_rate="0.00"
+        eta_text="Unknown"
+        if [[ "$prev_block" =~ ^[0-9]+$ && "$prev_ts" =~ ^[0-9]+$ && "$local_block" =~ ^[0-9]+$ ]]; then
+            block_diff=$((local_block - prev_block))
+            time_diff=$((now_ts - prev_ts))
+            if (( block_diff > 0 && time_diff > 0 )); then
+                block_rate=$(awk -v d="$block_diff" -v s="$time_diff" 'BEGIN { printf "%.2f", d / s }')
+                eta_seconds=$(awk -v left="$blocks_left" -v rate="$block_rate" 'BEGIN { if (rate > 0) printf "%.0f", left / rate; else print 0 }')
+                eta_text=$(format_duration "$eta_seconds")
+            fi
+        fi
+        if [[ "$catch_up" == "false" || "$blocks_left" == "0" ]]; then
+            eta_text="Already synced"
+        fi
+
+        print_logo
+        echo -e "${CYAN}--- Node Sync Dashboard ---${NC}"
         echo -e "Local Block     : ${GREEN}$(format_number "$local_block")${NC}"
         echo -e "Network Block   : ${CYAN}$(format_number "$network_block")${NC}"
         echo -e "Blocks Left     : ${YELLOW}$(format_number "$blocks_left")${NC}"
         echo -e "Sync Progress   : ${GREEN}${progress_pct}%${NC}"
-
-        if [[ "$catch_up" == "false" || "$blocks_left" == "0" ]]; then
-            echo -e "ETA Fully Sync  : ${GREEN}Already synced${NC}"
+        echo -e "Block Rate      : ${GREEN}${block_rate} blocks/sec${NC}"
+        if [[ "$eta_text" == "Already synced" ]]; then
+            echo -e "ETA Fully Sync  : ${GREEN}${eta_text}${NC}"
+        else
+            echo -e "ETA Fully Sync  : ${YELLOW}${eta_text}${NC}"
+        fi
+        if [[ "$catch_up" == "false" ]]; then
             echo -e "Sync Status     : ${GREEN}False (Fully Synced && Ready for Validator)${NC}"
         else
-            echo -e "${CYAN}Measuring sync speed for ETA...${NC}"
-            sample_seconds=5
-            sleep "$sample_seconds"
-            status_json_2=$(timeout 20 latandad status --home "$HOME_DIR" 2>/dev/null || true)
-            local_block_2=$(echo "$status_json_2" | jq -r '.sync_info.latest_block_height // 0' 2>/dev/null || echo "0")
-            if [[ "$local_block_2" =~ ^[0-9]+$ ]] && (( local_block_2 > local_block )); then
-                block_diff=$((local_block_2 - local_block))
-                block_rate=$(awk -v d="$block_diff" -v s="$sample_seconds" 'BEGIN { printf "%.2f", d / s }')
-                eta_seconds=$(awk -v left="$blocks_left" -v rate="$block_rate" 'BEGIN { if (rate > 0) printf "%.0f", left / rate; else print 0 }')
-                eta_text=$(format_duration "$eta_seconds")
-                echo -e "Block Rate      : ${GREEN}${block_rate} blocks/sec${NC}"
-                echo -e "ETA Fully Sync  : ${YELLOW}${eta_text}${NC}"
-            else
-                echo -e "Block Rate      : ${YELLOW}No progress during sample${NC}"
-                echo -e "ETA Fully Sync  : ${YELLOW}Unknown${NC}"
-            fi
             echo -e "Sync Status     : ${YELLOW}True (Still syncing...)${NC}"
         fi
-    fi
+        [[ -n "$last_error" ]] && echo -e "Warning         : ${YELLOW}${last_error}${NC}"
+        echo ""
+        echo -e "${CYAN}Refresh every ${refresh_sec}s | Press Ctrl+C to return to menu${NC}"
+
+        if [[ "$local_block" =~ ^[0-9]+$ ]]; then
+            prev_block="$local_block"
+            prev_ts="$now_ts"
+        fi
+        sleep "$refresh_sec"
+    done
+    trap - INT
     echo ""
-    read -p "Press Enter to return..." 
 }
 
 # ============================================
