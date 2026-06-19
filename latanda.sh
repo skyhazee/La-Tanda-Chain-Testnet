@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 2.0 (Live Sync Dashboard)
+# Version: 2.1 (Fast Live Sync Dashboard)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -460,29 +460,35 @@ function check_status() {
         return
     fi
 
+    local local_rpc="http://127.0.0.1:26657"
     local fallback_node="https://t-latanda.rpc.utsa.tech:443"
     local refresh_sec=3
     local prev_block="" prev_ts="" last_error=""
     local status_json net_json catch_up local_block network_block blocks_left progress_pct
-    local now_ts block_diff time_diff block_rate eta_seconds eta_text
+    local now_ts loop_started elapsed sleep_for tick block_diff time_diff block_rate eta_seconds eta_text
     local stop_dashboard=0
 
     trap 'stop_dashboard=1' INT
+    tick=0
     while (( stop_dashboard == 0 )); do
-        status_json=$(timeout 20 latandad status --home "$HOME_DIR" 2>/dev/null || true)
-        net_json=$(curl -fsS --max-time 10 "$fallback_node/status" 2>/dev/null || true)
+        loop_started=$(date +%s)
+        tick=$((tick + 1))
+        status_json=$(curl -fsS --max-time 2 "$local_rpc/status" 2>/dev/null || true)
 
         if ! echo "$status_json" | jq -e . >/dev/null 2>&1; then
-            last_error="Failed to read local node status within 20 seconds."
+            last_error="Failed to read local RPC status within 2 seconds."
             local_block="${prev_block:-0}"
             catch_up="true"
         else
             last_error=""
-            catch_up=$(echo "$status_json" | jq -r '.sync_info.catching_up // true')
-            local_block=$(echo "$status_json" | jq -r '.sync_info.latest_block_height // 0')
+            catch_up=$(echo "$status_json" | jq -r '.result.sync_info.catching_up // true')
+            local_block=$(echo "$status_json" | jq -r '.result.sync_info.latest_block_height // 0')
         fi
 
-        network_block=$(echo "$net_json" | jq -r '.result.sync_info.latest_block_height // empty' 2>/dev/null || true)
+        if (( tick == 1 || tick % 5 == 0 )); then
+            net_json=$(curl -fsS --max-time 1 "$fallback_node/status" 2>/dev/null || true)
+            network_block=$(echo "$net_json" | jq -r '.result.sync_info.latest_block_height // empty' 2>/dev/null || true)
+        fi
         if [[ -z "$network_block" || ! "$network_block" =~ ^[0-9]+$ ]]; then
             network_block="$local_block"
             [[ -z "$last_error" ]] && last_error="Failed to read public RPC network height."
@@ -533,7 +539,10 @@ function check_status() {
             prev_block="$local_block"
             prev_ts="$now_ts"
         fi
-        sleep "$refresh_sec"
+        elapsed=$(( $(date +%s) - loop_started ))
+        sleep_for=$((refresh_sec - elapsed))
+        (( sleep_for < 1 )) && sleep_for=1
+        sleep "$sleep_for"
     done
     trap - INT
     echo ""
