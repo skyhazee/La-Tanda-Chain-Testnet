@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 1.8 (Fix Go Checksum)
+# Version: 1.9 (Detailed Sync Status)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -300,6 +300,40 @@ function ltd_to_ultd() {
     '
 }
 
+function format_number() {
+    local value="${1:-0}"
+    awk -v n="$value" '
+        function group(x,    out, len, part) {
+            x = sprintf("%d", x)
+            out = ""
+            while (length(x) > 3) {
+                len = length(x)
+                part = substr(x, len - 2, 3)
+                out = "." part out
+                x = substr(x, 1, len - 3)
+            }
+            return x out
+        }
+        BEGIN { print group(n) }
+    ' 2>/dev/null || echo "$value"
+}
+
+function format_duration() {
+    local seconds="${1:-0}"
+    awk -v s="$seconds" '
+        BEGIN {
+            s = int(s)
+            if (s < 0) s = 0
+            d = int(s / 86400); s %= 86400
+            h = int(s / 3600); s %= 3600
+            m = int(s / 60)
+            if (d > 0) printf "%dd %dh %dm", d, h, m
+            else if (h > 0) printf "%dh %dm", h, m
+            else printf "%dm", m
+        }
+    '
+}
+
 # ============================================
 # Option 1: Install Node
 # ============================================
@@ -422,15 +456,58 @@ function check_status() {
     if ! command -v pm2 &> /dev/null || ! pm2 list | grep -q "latanda-chain"; then
         echo -e "${RED}Node is not running via PM2. Did you install it properly?${NC}"
     else
-        # Allow jq some time if start up is slow
-        catch_up=$(latandad status --home "$HOME_DIR" 2>&1 | jq -r '.sync_info.catching_up' || echo "true")
-        block=$(latandad status --home "$HOME_DIR" 2>&1 | jq -r '.sync_info.latest_block_height' || echo "-")
-        echo -e "Latest Validated Block:  ${GREEN}$block${NC}"
-        
-        if [[ "$catch_up" == "false" ]]; then
-            echo -e "Sync Status (Catching Up): ${GREEN}False (Fully Synced && Ready for Validator)${NC}"
+        local status_json status_json_2 net_json
+        local catch_up local_block local_block_2 network_block blocks_left progress_pct
+        local sample_seconds block_diff block_rate eta_seconds eta_text
+        local fallback_node="https://t-latanda.rpc.utsa.tech:443"
+
+        status_json=$(timeout 20 latandad status --home "$HOME_DIR" 2>/dev/null || true)
+        if ! echo "$status_json" | jq -e . >/dev/null 2>&1; then
+            echo -e "${RED}Failed to read local node status within 20 seconds.${NC}"
+            echo -e "${YELLOW}Try: pm2 logs latanda-chain --lines 80${NC}"
+            echo ""
+            read -p "Press Enter to return..."
+            return
+        fi
+
+        catch_up=$(echo "$status_json" | jq -r '.sync_info.catching_up // true')
+        local_block=$(echo "$status_json" | jq -r '.sync_info.latest_block_height // 0')
+        net_json=$(curl -fsS --max-time 10 "$fallback_node/status" 2>/dev/null || true)
+        network_block=$(echo "$net_json" | jq -r '.result.sync_info.latest_block_height // empty' 2>/dev/null || true)
+        if [[ -z "$network_block" || ! "$network_block" =~ ^[0-9]+$ ]]; then
+            network_block="$local_block"
+        fi
+
+        blocks_left=$((network_block - local_block))
+        (( blocks_left < 0 )) && blocks_left=0
+        progress_pct=$(awk -v l="$local_block" -v n="$network_block" 'BEGIN { if (n > 0) printf "%.2f", (l / n) * 100; else printf "0.00" }')
+
+        echo -e "Local Block     : ${GREEN}$(format_number "$local_block")${NC}"
+        echo -e "Network Block   : ${CYAN}$(format_number "$network_block")${NC}"
+        echo -e "Blocks Left     : ${YELLOW}$(format_number "$blocks_left")${NC}"
+        echo -e "Sync Progress   : ${GREEN}${progress_pct}%${NC}"
+
+        if [[ "$catch_up" == "false" || "$blocks_left" == "0" ]]; then
+            echo -e "ETA Fully Sync  : ${GREEN}Already synced${NC}"
+            echo -e "Sync Status     : ${GREEN}False (Fully Synced && Ready for Validator)${NC}"
         else
-            echo -e "Sync Status (Catching Up): ${YELLOW}True (Still syncing...)${NC}"
+            echo -e "${CYAN}Measuring sync speed for ETA...${NC}"
+            sample_seconds=5
+            sleep "$sample_seconds"
+            status_json_2=$(timeout 20 latandad status --home "$HOME_DIR" 2>/dev/null || true)
+            local_block_2=$(echo "$status_json_2" | jq -r '.sync_info.latest_block_height // 0' 2>/dev/null || echo "0")
+            if [[ "$local_block_2" =~ ^[0-9]+$ ]] && (( local_block_2 > local_block )); then
+                block_diff=$((local_block_2 - local_block))
+                block_rate=$(awk -v d="$block_diff" -v s="$sample_seconds" 'BEGIN { printf "%.2f", d / s }')
+                eta_seconds=$(awk -v left="$blocks_left" -v rate="$block_rate" 'BEGIN { if (rate > 0) printf "%.0f", left / rate; else print 0 }')
+                eta_text=$(format_duration "$eta_seconds")
+                echo -e "Block Rate      : ${GREEN}${block_rate} blocks/sec${NC}"
+                echo -e "ETA Fully Sync  : ${YELLOW}${eta_text}${NC}"
+            else
+                echo -e "Block Rate      : ${YELLOW}No progress during sample${NC}"
+                echo -e "ETA Fully Sync  : ${YELLOW}Unknown${NC}"
+            fi
+            echo -e "Sync Status     : ${YELLOW}True (Still syncing...)${NC}"
         fi
     fi
     echo ""
