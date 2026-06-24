@@ -1694,6 +1694,17 @@ history = deque(maxlen=HISTORY_LEN); logs = deque(maxlen=60); start_ts = time.ti
 def add_log(msg, lvl="INFO"):
     logs.appendleft(f"{DIM}{datetime.now().strftime('%H:%M:%S')}{R} {({'OK': GRN, 'WARN': YLW, 'ERR': RED, 'INFO': BLU}.get(lvl, DIM))}[{lvl:4}]{R} {msg}")
 
+def val_status_label(status_str):
+    """Convert BOND_STATUS_* to a readable colored label."""
+    s = (status_str or "").upper()
+    if "BONDED" in s and "UNBONDING" not in s and "UNBONDED" not in s:
+        return f"{GRN}{BLD}ACTIVE{R}"
+    elif "UNBONDING" in s:
+        return f"{YLW}{BLD}UNBONDING{R}"
+    elif "UNBONDED" in s:
+        return f"{RED}{BLD}UNBONDED{R}"
+    return f"{DIM}UNKNOWN{R}"
+
 def render(local_st, net_h, peers):
     W = 90
     local = local_st.get("local", 0); catching = local_st.get("catching_up", True)
@@ -1709,25 +1720,75 @@ def render(local_st, net_h, peers):
     node_status = f"{RED}{BLD}[ERROR]{R}" if has_err else f"{GRN}{BLD}[SYNCED]{R}" if not catching else f"{YLW}{BLD}[SYNCING]{R}"
     with _sc["lock"]: signed, missed, val_start, b_done, b_pct = _sc["signed"], _sc["missed"], _sc["val_start"], _sc["backfill_done"], _sc["backfill_pct"]
     score = calc_scores(signed, missed, local, net_h)
+    total_blocks = signed + missed
+
+    # Fetch validator on-chain info
+    vinfo = get_validator_info()
+    sinfo = get_slash_info()
+    dinfo = get_delegations()
     
     clr()
     pad = max(0, (W - 54) // 2)
     print(f"\n{BLD}{CYN}{' '*pad}  VALIDATOR - LA TANDA CHAIN MONITOR  {R}\n{DIM}{box(W)}{R}")
     print(f"  {node_status}   {DIM}monitor uptime:{R} {WHT}{fmt_dur(time.time()-start_ts)}{R}   {DIM}peers:{R} {WHT}{peers or '-'}{R}\n{DIM}{box(W)}{R}\n")
-    print(f"  {BLD}{BLU}> VALIDATOR SCORE{R}\n  {DIM}{'-'*52}{R}")
-    print(f"  {DIM}Final Score:<24{R}{score_col(score[2])}{BLD}{score[2]:.2f}/100{R}")
-    print(f"  {pbar(score[2], W-6, score_col(score[2]))}\n")
-    
+
+    # === VALIDATOR IDENTITY ===
+    print(f"  {BLD}{BLU}> VALIDATOR{R}\n  {DIM}{'-'*52}{R}")
+    short_valoper = VALOPER[:20] + "..." + VALOPER[-8:] if len(VALOPER) > 32 else VALOPER
+    print(f"  {DIM}{'Address:':<16}{R}{CYN}{short_valoper}{R}")
+    if CONS_HEX:
+        print(f"  {DIM}{'Consensus Hex:':<16}{R}{DIM}{CONS_HEX[:16]}...{R}")
+    else:
+        print(f"  {DIM}{'Consensus Hex:':<16}{R}{RED}NOT FOUND{R}  {DIM}(cannot track signing){R}")
+    if vinfo.get("ok"):
+        vstatus = val_status_label(vinfo.get("status", ""))
+        jailed = vinfo.get("jailed", False)
+        jail_label = f"  {RED}{BLD}[JAILED]{R}" if jailed else ""
+        tokens_fmt = fmt_ltd(vinfo.get("tokens", 0))
+        commission = vinfo.get("commission", 0)
+        print(f"  {DIM}{'Status:':<16}{R}{vstatus}{jail_label}")
+        print(f"  {DIM}{'Total Stake:':<16}{R}{WHT}{tokens_fmt}{R}   {DIM}Commission: {commission:.1f}%{R}")
+    else:
+        print(f"  {DIM}{'Status:':<16}{R}{RED}Unable to fetch validator info{R}")
+    if dinfo.get("ok"):
+        print(f"  {DIM}{'Delegators:':<16}{R}{WHT}{dinfo['count']}{R}   {DIM}Total: {fmt_ltd(dinfo['total'])}{R}")
+    print()
+
+    # === VALIDATOR SCORE ===
+    print(f"  {BLD}{BLU}> SIGNING PERFORMANCE{R}\n  {DIM}{'-'*52}{R}")
+    print(f"  {DIM}{'Final Score:':<16}{R}{score_col(score[2])}{BLD}{score[2]:.2f}/100{R}   {DIM}(uptime {score[0]:.1f}% x0.6 + sync {score[1]:.1f}% x0.4){R}")
+    print(f"  {pbar(score[2], W-6, score_col(score[2]))}")
+    print(f"  {DIM}{'Signed:':<16}{R}{GRN}{fmt_n(signed)}{R}   {DIM}Missed:{R} {RED if missed > 0 else DIM}{fmt_n(missed)}{R}   {DIM}Total: {fmt_n(total_blocks)}{R}")
+    if sinfo.get("ok"):
+        mc = sinfo.get("missed_counter", 0)
+        tomb = sinfo.get("tombstoned", False)
+        mc_col = RED if mc > 50 else YLW if mc > 10 else GRN
+        print(f"  {DIM}{'Missed (chain):':<16}{R}{mc_col}{mc}{R}   {DIM}Tombstoned:{R} {'${RED}YES' if tomb else f'{GRN}No'}{R}")
+    if not b_done:
+        print(f"  {DIM}{'Backfill:':<16}{R}{YLW}{b_pct:.1f}%{R} {DIM}(scanning historical blocks...){R}")
+    print()
+
+    # === NODE SYNC ===
     print(f"  {BLD}{BLU}> NODE SYNC{R}\n  {DIM}{'-'*52}{R}")
-    print(f"  {DIM}Block Lokal:<24{R}{CYN}{BLD}{fmt_n(local)}{R}   {DIM}Sisa: {fmt_n(remaining)}{R}")
+    print(f"  {DIM}{'Block Lokal:':<16}{R}{CYN}{BLD}{fmt_n(local)}{R}   {DIM}Sisa: {fmt_n(remaining)}{R}")
     print(f"  {pbar(pct_sync, W-14)}  {BLD}{pct_sync:.2f}%{R}\n")
     
     print(f"  {DIM}{'-'*4} Log {'-'*(W-12)}{R}")
     for line in list(logs)[:LOG_LINES]: print(f"  {line}")
-    print(f"\n{DIM}{box(W)}{R}\n  {DIM}Ctrl+C keluar | screen -r latmon re-attach{R}\n")
+    print(f"\n{DIM}{box(W)}{R}\n  {DIM}Ctrl+C keluar | latmon attach to re-attach{R}\n")
 
 def main():
     global net_src
+    # Startup validation logging
+    if not CONS_HEX:
+        add_log(f"WARN: Could not derive consensus key for {VALOPER[:24]}...", "WARN")
+        add_log("Signing detection will NOT work without consensus key", "ERR")
+    else:
+        add_log(f"Validator: {VALOPER[:24]}... | Cons: {CONS_HEX[:12]}...", "OK")
+    if VAL_START_H > 0:
+        add_log(f"Signing start height: #{VAL_START_H}", "OK")
+    else:
+        add_log("Could not determine signing start height", "WARN")
     add_log("Monitor dimulai", "OK")
     threading.Thread(target=signing_thread, args=(threading.Event(),), daemon=True).start()
     net_h = peers = tick = prev_local = prev_net = None
