@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # La Tanda Chain - Interactive Node Manager
-# Version: 2.1 (Fast Live Sync Dashboard)
+# Version: 2.2 (Configurable Monitor Validator)
 # Chain ID: latanda-testnet-1
 # Token: LTD (denom: ultd)
 # ============================================
@@ -1363,10 +1363,20 @@ function install_advanced_monitor() {
     INSTALL_DIR="$HOME/.latandad-monitor"
     mkdir -p "$INSTALL_DIR"
 
+    echo -e "${CYAN}Enter the validator operator address to monitor.${NC}"
+    echo -e "Example: ltdvaloper1..."
+    read -p "Validator operator address: " MONITOR_VALOPER
+    if [[ ! "$MONITOR_VALOPER" =~ ^ltdvaloper1[a-z0-9]{38,58}$ ]]; then
+        echo -e "${RED}Invalid validator operator address format.${NC}"
+        read -p "Press Enter to return..."
+        return
+    fi
+    printf 'VALOPER=%s\n' "$MONITOR_VALOPER" > "$INSTALL_DIR/monitor.env"
+
     # Write Python Script
     cat > "$INSTALL_DIR/monitor.py" << 'PYEOF'
 #!/usr/bin/env python3
-import subprocess, json, time, os, sys, threading
+import base64, hashlib, subprocess, json, time, os, sys, threading, re
 from datetime import datetime
 from collections import deque
 
@@ -1375,14 +1385,18 @@ LOCAL_RPC    = "http://localhost:26657"
 GENESIS_RPC  = "http://168.231.67.201:26657"
 API_BASE     = "http://localhost:1317"
 NODE_HOME    = os.path.expanduser("~/.latanda")
-VALOPER      = "ltdvaloper1rqff4y87n39qzd4e4y4vcdawvss3e8mq8d2wqv"
-CONS_HEX     = "BE0D26EAE32F40DF14F471AA7D2F917640C264F6"
-CONS_BECH32  = "ltdvalcons1hcxjd6hr9aqd7985wx486tu3weqvye8kwdngrt"
-VAL_START_H  = 426813
+CONFIG_DIR   = os.path.expanduser("~/.latandad-monitor")
+CONFIG_PATH  = os.path.join(CONFIG_DIR, "monitor.env")
+VALOPER      = ""
+CONS_HEX     = ""
+CONS_BECH32  = ""
+VAL_START_H  = 0
 REFRESH_SEC  = 10
 HISTORY_LEN  = 20
 LOG_LINES    = 3
 GENESIS_H    = 329
+
+VALOPER_RE   = re.compile(r'^ltdvaloper1[a-z0-9]{38,58}$')
 
 R="\033[0m"; BLD="\033[1m"; DIM="\033[2m"
 CYN="\033[36m"; GRN="\033[32m"; YLW="\033[33m"
@@ -1399,6 +1413,147 @@ def http_get(url, timeout=12):
             return json.loads(r.read())
     except:
         return None
+
+def run_cmd(args, timeout=10):
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout.strip() or r.stderr.strip()) if r.returncode == 0 else ""
+    except:
+        return ""
+
+def run_json(args, timeout=10):
+    raw = run_cmd(args, timeout)
+    try:
+        return json.loads(raw)
+    except:
+        return None
+
+def read_config_valoper():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VALOPER="):
+                    return line.split("=", 1)[1].strip()
+    except:
+        pass
+    return ""
+
+def save_config_valoper(valoper):
+    """Save the validator operator address to config for future sessions."""
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write(f"VALOPER={valoper}\n")
+    except Exception as e:
+        print(f"{RED}[!] Failed to save config: {e}{R}")
+
+def resolve_valoper():
+    """Determine VALOPER from: CLI arg > saved config > interactive prompt."""
+    # 1. CLI argument takes priority (latmon <address>)
+    if len(sys.argv) > 1:
+        candidate = sys.argv[1].strip()
+        if VALOPER_RE.match(candidate):
+            save_config_valoper(candidate)
+            return candidate
+        else:
+            print(f"{RED}[!] Invalid validator address format: {candidate}{R}")
+            print(f"{DIM}    Expected: ltdvaloper1...{R}")
+            sys.exit(1)
+
+    # 2. Check saved config
+    saved = read_config_valoper()
+    if saved and VALOPER_RE.match(saved):
+        return saved
+
+    # 3. Interactive prompt as last resort
+    print(f"\n{BLD}{CYN}  LA TANDA CHAIN - VALIDATOR MONITOR{R}")
+    print(f"{DIM}{'─'*50}{R}")
+    print(f"\n  {YLW}No validator address configured.{R}")
+    print(f"  {DIM}Enter your validator operator address to start monitoring.{R}")
+    print(f"  {DIM}Example: ltdvaloper1abc123...{R}\n")
+
+    while True:
+        try:
+            addr = input(f"  {CYN}Validator address:{R} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n{DIM}Exiting.{R}")
+            sys.exit(0)
+        if VALOPER_RE.match(addr):
+            save_config_valoper(addr)
+            print(f"  {GRN}[OK] Saved! Starting monitor...{R}\n")
+            return addr
+        else:
+            print(f"  {RED}[!] Invalid format. Must start with 'ltdvaloper1' followed by 38-58 alphanumeric chars.{R}")
+
+CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+def bech32_polymod(values):
+    chk = 1
+    for v in values:
+        top = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i, g in enumerate([0x3b6a57b2,0x26508e6d,0x1ea119fa,0x3d4233dd,0x2a1462b3]):
+            if (top >> i) & 1: chk ^= g
+    return chk
+def bech32_hrp_expand(hrp):
+    return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+def bech32_create_checksum(hrp, data):
+    values = bech32_hrp_expand(hrp) + data
+    polymod = bech32_polymod(values + [0,0,0,0,0,0]) ^ 1
+    return [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
+def convertbits(data, frombits, tobits, pad=True):
+    acc = bits = 0; ret = []; maxv = (1 << tobits) - 1
+    for value in data:
+        acc = (acc << frombits) | value
+        bits += frombits
+        while bits >= tobits:
+            bits -= tobits
+            ret.append((acc >> bits) & maxv)
+    if pad and bits:
+        ret.append((acc << (tobits - bits)) & maxv)
+    return ret
+def bech32_encode(hrp, payload):
+    data = convertbits(payload, 8, 5)
+    combined = data + bech32_create_checksum(hrp, data)
+    return hrp + "1" + "".join(CHARSET[d] for d in combined)
+
+def consensus_bech32_from_hex(cons_hex):
+    try:
+        return bech32_encode("ltdvalcons", bytes.fromhex(cons_hex))
+    except:
+        return ""
+
+def validator_pubkey_key(v):
+    pk = v.get("consensus_pubkey") or {}
+    return pk.get("key") or pk.get("value") or ""
+
+def get_validator_record(valoper):
+    d = run_json([BINARY, "query", "staking", "validator", valoper, "--home", NODE_HOME, "--output", "json"], timeout=12)
+    if d and "validator" in d: return d["validator"]
+    d = http_get(f"{API_BASE}/cosmos/staking/v1beta1/validators/{valoper}", timeout=10)
+    return (d or {}).get("validator") or {}
+
+def consensus_hex_from_validator(v):
+    key = validator_pubkey_key(v)
+    try:
+        raw = base64.b64decode(key)
+        return hashlib.sha256(raw).digest()[:20].hex().upper()
+    except:
+        return ""
+
+def signing_start_height(cons_bech32):
+    if not cons_bech32: return 0
+    d = http_get(f"{API_BASE}/cosmos/slashing/v1beta1/signing_infos/{cons_bech32}", timeout=10)
+    si = (d or {}).get("val_signing_info") or {}
+    try: return int(si.get("start_height", 0))
+    except: return 0
+
+# --- Resolve VALOPER at startup ---
+VALOPER = resolve_valoper()
+print(f"{DIM}  Attaching to validator: {CYN}{VALOPER}{R}")
+_validator_record = get_validator_record(VALOPER) if VALOPER else {}
+CONS_HEX = consensus_hex_from_validator(_validator_record)
+CONS_BECH32 = consensus_bech32_from_hex(CONS_HEX)
+VAL_START_H = signing_start_height(CONS_BECH32)
 
 def get_local_status():
     try:
@@ -1603,26 +1758,93 @@ PYEOF
 #!/bin/bash
 SCREEN_NAME="latmon"
 MONITOR_PATH="$MONITOR_FULL_PATH"
+CONFIG_DIR="\$HOME/.latandad-monitor"
+CONFIG_FILE="\$CONFIG_DIR/monitor.env"
+VALOPER_RE='^ltdvaloper1[a-z0-9]{38,58}\$'
+
+get_saved_valoper() {
+    [[ -f "\$CONFIG_FILE" ]] && grep -oP '^VALOPER=\K.*' "\$CONFIG_FILE" 2>/dev/null || echo ""
+}
 
 case "\$1" in
   stop) screen -XS \$SCREEN_NAME quit 2>/dev/null && echo "Monitor dihentikan." || echo "Tidak ada session aktif." ;;
   attach|log) screen -r \$SCREEN_NAME ;;
   status) screen -list | grep \$SCREEN_NAME || echo "Monitor tidak berjalan." ;;
-  restart) screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1; screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH; echo -e "\033[32m[OK] Monitor di-restart.\033[0m" ;;
+  restart)
+    VALOPER_ADDR="\${2:-\$(get_saved_valoper)}"
+    screen -XS \$SCREEN_NAME quit 2>/dev/null; sleep 1
+    if [[ -n "\$VALOPER_ADDR" ]]; then
+      screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH "\$VALOPER_ADDR"
+    else
+      screen -S \$SCREEN_NAME python3 \$MONITOR_PATH
+    fi
+    echo -e "\033[32m[OK] Monitor di-restart.\033[0m"
+    ;;
+  set)
+    # latmon set <valoper_address> - save address without starting
+    if [[ -z "\$2" ]] || [[ ! "\$2" =~ \$VALOPER_RE ]]; then
+      echo -e "\033[31m[!] Usage: latmon set ltdvaloper1...\033[0m"
+      exit 1
+    fi
+    mkdir -p "\$CONFIG_DIR"
+    printf 'VALOPER=%s\n' "\$2" > "\$CONFIG_FILE"
+    echo -e "\033[32m[OK] Validator address saved: \$2\033[0m"
+    echo -e "     Run 'latmon' to start monitoring."
+    ;;
   *)
+    # Determine valoper: positional arg > saved config > interactive prompt
+    VALOPER_ADDR="\${1:-}"
+
     if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
       echo -e "\033[33m[!] Monitor sudah berjalan.\033[0m"
-      echo -e "    Attach  : screen -r \$SCREEN_NAME"
+      echo -e "    Attach  : latmon attach  (or screen -r \$SCREEN_NAME)"
       echo -e "    Stop    : latmon stop"
-    else
-      echo -e "\033[32m[OK] Memulai monitor...\033[0m"
-      screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH
-      sleep 0.8
-      if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
-        echo -e "\033[32m[OK] Berjalan! Attach dengan:\033[0m  screen -r \$SCREEN_NAME"
-      else
-        echo -e "\033[31m[FAIL] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
+      echo -e "    Restart : latmon restart [ltdvaloper1...]"
+      exit 0
+    fi
+
+    if [[ -n "\$VALOPER_ADDR" ]]; then
+      # Address provided as argument
+      if [[ ! "\$VALOPER_ADDR" =~ \$VALOPER_RE ]]; then
+        echo -e "\033[31m[!] Invalid validator address format.\033[0m"
+        echo -e "    Expected: ltdvaloper1..."
+        exit 1
       fi
+      echo -e "\033[32m[OK] Memulai monitor untuk: \$VALOPER_ADDR\033[0m"
+      screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH "\$VALOPER_ADDR"
+    else
+      # No argument - Python script will prompt or read config
+      SAVED=\$(get_saved_valoper)
+      if [[ -n "\$SAVED" ]] && [[ "\$SAVED" =~ \$VALOPER_RE ]]; then
+        echo -e "\033[32m[OK] Memulai monitor untuk: \$SAVED\033[0m"
+        screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH "\$SAVED"
+      else
+        echo -e "\033[33m[!] No validator address configured.\033[0m"
+        echo -e "\n\033[36mUsage:\033[0m"
+        echo -e "  latmon ltdvaloper1...     Start monitor with validator address"
+        echo -e "  latmon set ltdvaloper1... Save address for future use"
+        echo -e "  latmon attach             Re-attach to running monitor"
+        echo -e "  latmon stop               Stop the monitor"
+        echo -e "  latmon restart            Restart the monitor"
+        echo -e ""
+        # Interactive fallback: ask for address
+        read -p "Enter your validator operator address: " VALOPER_ADDR
+        if [[ ! "\$VALOPER_ADDR" =~ \$VALOPER_RE ]]; then
+          echo -e "\033[31m[!] Invalid address format. Exiting.\033[0m"
+          exit 1
+        fi
+        mkdir -p "\$CONFIG_DIR"
+        printf 'VALOPER=%s\n' "\$VALOPER_ADDR" > "\$CONFIG_FILE"
+        echo -e "\033[32m[OK] Address saved & starting monitor...\033[0m"
+        screen -dmS \$SCREEN_NAME python3 \$MONITOR_PATH "\$VALOPER_ADDR"
+      fi
+    fi
+
+    sleep 0.8
+    if screen -list 2>/dev/null | grep -q "\$SCREEN_NAME"; then
+      echo -e "\033[32m[OK] Berjalan! Attach dengan:\033[0m  latmon attach"
+    else
+      echo -e "\033[31m[FAIL] Gagal start. Coba manual:\033[0m  python3 \$MONITOR_PATH"
     fi
     ;;
 esac
@@ -1727,7 +1949,7 @@ case "${1:-}" in
     logs) show_logs ;;
     monitor) 
         if command -v latmon &> /dev/null; then
-            latmon attach || latmon
+            latmon attach || latmon "${2:-}"
         else
             echo -e "${RED}Monitor is not installed. Run 'latman' and choose option 8 to install it.${NC}"
         fi
@@ -1747,7 +1969,7 @@ case "${1:-}" in
         echo "    rewards     - Check or claim validator rewards"
         echo "    gov         - Manage governance proposals"
         echo "    logs        - View live pm2 logs"
-        echo "    monitor     - Attach to advanced python monitor"
+        echo "    monitor [addr] - Attach or start monitor (optionally with validator address)"
         echo "    update [--force] - Check latest script and auto-update latman"
         echo "    install     - Install node and run with PM2"
         echo "    uninstall   - Cleanly wipe the node, data, and CLI manager"
